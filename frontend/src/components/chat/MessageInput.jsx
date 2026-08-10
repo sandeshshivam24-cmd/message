@@ -114,7 +114,7 @@ export const MessageInput = ({ replyToMessage, onCancelReply }) => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <div className="chat-composer-wrapper">
       {/* Reply Banner */}
       {replyToMessage && (
         <div className="reply-preview-bar">

@@ -2,10 +2,13 @@ import React, { useEffect, useRef } from 'react';
 import { MessageItem } from './MessageItem';
 
 export const MessageList = ({ messages, searchQuery = '', onReply, onCopy, onImageClick }) => {
+  const containerRef = useRef(null);
   const bottomRef = useRef(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
   }, [messages.length]);
 
   const filteredMessages = messages.filter((m) => {
@@ -31,7 +34,7 @@ export const MessageList = ({ messages, searchQuery = '', onReply, onCopy, onIma
   let lastDateLabel = null;
 
   return (
-    <div className="messages-container">
+    <div className="messages-container" ref={containerRef}>
       {filteredMessages.length === 0 ? (
         <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: 'auto', marginBottom: 'auto', fontSize: '0.88rem' }}>
           {searchQuery ? `No messages found matching "${searchQuery}"` : 'No messages yet. Send a message to start chatting!'}
