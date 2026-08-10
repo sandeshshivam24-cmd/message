@@ -1,6 +1,9 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:5000/api';
+// Dynamically resolve backend API base URL from Vite environment variable (defaults to localhost:5000 in dev)
+const rawBaseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/+$/, '');
+export const API_BASE_URL = rawBaseUrl.endsWith('/api') ? rawBaseUrl : `${rawBaseUrl}/api`;
+export const BACKEND_SERVER_URL = rawBaseUrl.replace(/\/api$/, '');
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -9,8 +12,9 @@ const api = axios.create({
   }
 });
 
+// Request interceptor ensuring Authorization header is attached
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('messenger_token');
+  const token = localStorage.getItem('messenger_jwt_token') || localStorage.getItem('messenger_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -45,6 +49,7 @@ export const chatApi = {
       }
     }
   }),
+  getSignedMediaUrl: (params) => api.get('/chat/media/signed-url', { params }),
   deleteMessageForMe: (messageId) => api.delete(`/chat/messages/${messageId}`)
 };
 

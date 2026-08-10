@@ -31,17 +31,25 @@ app.use(helmet({
   contentSecurityPolicy: false
 }));
 
-// CORS Configuration
-const allowedOrigins = [CORS_ORIGIN, 'http://localhost:5173', 'http://127.0.0.1:5173'];
+// Allowed Origins for Production (Vercel & DuckDNS) and Local Development
+const allowedOrigins = [
+  CORS_ORIGIN,
+  'https://aisolver-sigma.vercel.app',
+  'https://learnai1234.duckdns.org',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173'
+];
+
+const checkOrigin = (origin, callback) => {
+  if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+    callback(null, true);
+  } else {
+    callback(new Error(`Blocked by CORS policy: ${origin}`));
+  }
+};
 
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Blocked by CORS policy'));
-    }
-  },
+  origin: checkOrigin,
   credentials: true
 }));
 
@@ -69,7 +77,7 @@ app.get('/api/health', (req, res) => {
     architecture: process.env.DATABASE_URL ? 'Repository Pattern (Supabase PostgreSQL Active)' : 'Repository Pattern (In-Memory Active)',
     databaseConnected: Boolean(process.env.DATABASE_URL),
     storageProvider: 'Supabase Storage Bucket',
-    version: '3.2.0'
+    version: '3.3.0'
   });
 });
 
@@ -88,7 +96,7 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: checkOrigin,
     methods: ['GET', 'POST'],
     credentials: true
   }
@@ -114,6 +122,7 @@ const startServer = async () => {
       console.log(`🐘 Database: ${process.env.DATABASE_URL ? 'Supabase PostgreSQL Connected' : 'In-Memory Store'}`);
       console.log(`📦 Storage: Supabase Storage Bucket ('messenger-uploads')`);
       console.log(`🔒 Security: Helmet, Authorization & Rate Limiting active`);
+      console.log(`🌐 CORS Allowed Origins: ${allowedOrigins.join(', ')} + *.vercel.app`);
       console.log(`⚡ Socket.IO listening for real-time connections...`);
       console.log(`=======================================================`);
     });

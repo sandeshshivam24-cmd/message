@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
-import { chatApi } from '../api/client';
+import { chatApi, BACKEND_SERVER_URL } from '../api/client';
 import { playMessageChime } from '../utils/audioSynth';
 
 const SocketContext = createContext(null);
@@ -31,12 +31,13 @@ export const SocketProvider = ({ children }) => {
     }
 
     setConnectionStatus('connecting');
-    const newSocket = io('http://localhost:5000', {
+    const newSocket = io(BACKEND_SERVER_URL, {
       auth: { token },
       autoConnect: true,
       reconnection: true,
       reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000
+      reconnectionDelay: 1000,
+      transports: ['websocket', 'polling']
     });
 
     setSocket(newSocket);

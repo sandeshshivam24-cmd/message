@@ -1,10 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
+import { chatApi } from '../../api/client';
 import { Check, CheckCheck, MoreVertical, Reply, Copy, Trash2, FileText, Download, AlertCircle, RefreshCw } from 'lucide-react';
-
-const API_BASE = '/api';
 
 const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClick }) => {
   const { user } = useAuth();
@@ -23,23 +21,17 @@ const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClic
         return;
       }
 
-      const token = localStorage.getItem('messenger_jwt_token');
-      if (token) {
-        axios.get(`${API_BASE}/chat/media/signed-url`, {
-          params: {
-            conversationId: message.conversationId,
-            messageId: message.id,
-            mediaUrl: message.mediaUrl
-          },
-          headers: { Authorization: `Bearer ${token}` }
-        }).then(res => {
-          if (isMounted && res.data?.signedUrl) {
-            setSignedUrl(res.data.signedUrl);
-          }
-        }).catch(err => {
-          console.warn('Signed URL authorization notice:', err.message);
-        });
-      }
+      chatApi.getSignedMediaUrl({
+        conversationId: message.conversationId,
+        messageId: message.id,
+        mediaUrl: message.mediaUrl
+      }).then(res => {
+        if (isMounted && res.data?.signedUrl) {
+          setSignedUrl(res.data.signedUrl);
+        }
+      }).catch(err => {
+        console.warn('Signed URL authorization notice:', err.message);
+      });
     }
     return () => { isMounted = false; };
   }, [message.id, message.mediaUrl, message.conversationId, message.type]);
