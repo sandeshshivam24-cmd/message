@@ -1,0 +1,124 @@
+import { MessageRepository } from '../MessageRepository.js';
+import { query } from '../../config/db.js';
+
+export class PostgresMessageRepository extends MessageRepository {
+  _mapMessage(row) {
+    if (!row) return null;
+    let replyTo = row.reply_to || null;
+    if (typeof replyTo === 'string') {
+      try {
+        replyTo = JSON.parse(replyTo);
+      } catch (e) {}
+    }
+    return {
+      id: row.id,
+      conversationId: row.conversation_id,
+      senderId: row.sender_id,
+      recipientId: row.recipient_id,
+      text: row.text || '',
+      type: row.type || 'text',
+      mediaUrl: row.media_url || null,
+      fileName: row.file_name || null,
+      fileSize: row.file_size ? Number(row.file_size) : null,
+      fileType: row.file_type || null,
+      status: row.status || 'sent',
+      replyTo,
+      deletedFor: row.deleted_for || [],
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString()
+    };
+  }
+
+  async create(messageData) {
+    const id = messageData.id || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const sql = `
+      INSERT INTO messages (
+        id, conversation_id, sender_id, recipient_id, text, type,
+        media_url, file_name, file_size, file_type, status, reply_to, deleted_for
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      RETURNING *
+    `;
+    const values = [
+      id,
+      messageData.conversationId,
+      messageData.senderId,
+      messageData.recipientId,
+      messageData.text || '',
+      messageData.type || 'text',
+      messageData.mediaUrl || null,
+      messageData.fileName || null,
+      messageData.fileSize || null,
+      messageData.fileType || null,
+      messageData.status || 'sent',
+      messageData.replyTo ? JSON.stringify(messageData.replyTo) : null,
+      []
+    ];
+
+    const res = await query(sql, values);
+    return this._mapMessage(res.rows[0]);
+  }
+
+  async findById(id) {
+    const res = await query('SELECT * FROM messages WHERE id = $1', [id]);
+    return this._mapMessage(res.rows[0]);
+  }
+
+  async findByConversationId(conversationId, userId) {
+    const sql = `
+      SELECT * FROM messages
+      WHERE conversation_id = $1
+      AND (deleted_for IS NULL OR NOT ($2 = ANY(deleted_for)))
+      ORDER BY created_at ASC
+    `;
+    const res = await query(sql, [conversationId, userId]);
+    return res.rows.map(row => this._mapMessage(row));
+  }
+
+  async updateStatus(messageId, status) {
+    const sql = `
+      UPDATE messages
+      SET status = $1, updated_at = NOW()
+      WHERE id = $2
+      RETURNING *
+    `;
+    const res = await query(sql, [status, messageId]);
+    return this._mapMessage(res.rows[0]);
+  }
+
+  async markConversationAsDelivered(conversationId, recipientId) {
+    const sql = `
+      UPDATE messages
+      SET status = 'delivered', updated_at = NOW()
+      WHERE conversation_id = $1 AND recipient_id = $2 AND status = 'sent'
+      RETURNING *
+    `;
+    const res = await query(sql, [conversationId, recipientId]);
+    return res.rows.map(row => this._mapMessage(row));
+  }
+
+  async markConversationAsSeen(conversationId, recipientId) {
+    const sql = `
+      UPDATE messages
+      SET status = 'seen', updated_at = NOW()
+      WHERE conversation_id = $1 AND recipient_id = $2 AND (status = 'sent' OR status = 'delivered')
+      RETURNING *
+    `;
+    const res = await query(sql, [conversationId, recipientId]);
+    return res.rows.map(row => this._mapMessage(row));
+  }
+
+  async deleteForUser(messageId, userId) {
+    const sql = `
+      UPDATE messages
+      SET deleted_for = array_append(deleted_for, $2), updated_at = NOW()
+      WHERE id = $1 AND NOT ($2 = ANY(deleted_for))
+      RETURNING *
+    `;
+    const res = await query(sql, [messageId, userId]);
+    if (res.rows.length === 0) {
+      return this.findById(messageId);
+    }
+    return this._mapMessage(res.rows[0]);
+  }
+}
