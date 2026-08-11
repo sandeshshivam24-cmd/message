@@ -49,10 +49,17 @@ export const MessageInput = ({ replyToMessage, onCancelReply }) => {
     // Reset input value so same file can be selected again
     e.target.value = '';
 
-    const isImage = file.type.startsWith('image/');
-    const type = forcedType || (isImage ? 'image' : 'file');
+    const mime = file.type.toLowerCase();
+    let type = forcedType;
+    if (!type) {
+      if (mime.startsWith('image/')) type = 'image';
+      else if (mime.startsWith('video/')) type = 'video';
+      else if (mime.startsWith('audio/')) type = 'audio';
+      else type = 'file';
+    }
+
     const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-    const previewUrl = isImage ? URL.createObjectURL(file) : null;
+    const previewUrl = (type === 'image' || type === 'video' || type === 'audio') ? URL.createObjectURL(file) : null;
 
     // 1. Immediate optimistic message insertion into sender chat
     const optimisticMessage = {
@@ -142,7 +149,7 @@ export const MessageInput = ({ replyToMessage, onCancelReply }) => {
         ref={fileInputRef}
         accept="*/*"
         style={{ display: 'none' }}
-        onChange={(e) => handleFileUpload(e, 'file')}
+        onChange={(e) => handleFileUpload(e, null)}
       />
 
       {/* Input Field Form */}

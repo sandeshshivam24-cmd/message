@@ -2,13 +2,52 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import { chatApi } from '../../api/client';
-import { Check, CheckCheck, MoreVertical, Reply, Copy, Trash2, FileText, Download, AlertCircle, RefreshCw, Ban } from 'lucide-react';
+import { Check, CheckCheck, MoreVertical, Reply, Copy, Trash2, FileText, Download, AlertCircle, RefreshCw, Ban, Play, Music } from 'lucide-react';
+
+const getMediaType = (message) => {
+  if (!message) return 'text';
+  if (message.isDeletedForEveryone) return 'deleted';
+
+  const explicitType = (message.type || '').toLowerCase();
+  const fileType = (message.fileType || message.file_type || message.mimeType || message.mime_type || '').toLowerCase();
+  const fileName = (message.fileName || message.file_name || message.filename || '').toLowerCase();
+  const mediaUrl = (message.mediaUrl || message.media_url || '').toLowerCase();
+
+  const isImageExt = /\.(jpg|jpeg|png|gif|webp|heic|heif|bmp|svg)(\?.*)?$/i.test(fileName) || /\.(jpg|jpeg|png|gif|webp|heic|heif|bmp|svg)(\?.*)?$/i.test(mediaUrl);
+  const isVideoExt = /\.(mp4|webm|mov|avi|mkv)(\?.*)?$/i.test(fileName) || /\.(mp4|webm|mov|avi|mkv)(\?.*)?$/i.test(mediaUrl);
+  const isAudioExt = /\.(mp3|wav|ogg|m4a|aac|flac)(\?.*)?$/i.test(fileName) || /\.(mp3|wav|ogg|m4a|aac|flac)(\?.*)?$/i.test(mediaUrl);
+  const isPdfExt = /\.pdf(\?.*)?$/i.test(fileName) || /\.pdf(\?.*)?$/i.test(mediaUrl);
+
+  if (explicitType === 'image' || fileType.startsWith('image/') || isImageExt) {
+    return 'image';
+  }
+
+  if (explicitType === 'video' || fileType.startsWith('video/') || isVideoExt) {
+    return 'video';
+  }
+
+  if (explicitType === 'audio' || fileType.startsWith('audio/') || isAudioExt) {
+    return 'audio';
+  }
+
+  if (fileType === 'application/pdf' || isPdfExt) {
+    return 'pdf';
+  }
+
+  if (explicitType === 'file' || fileType || fileName || mediaUrl) {
+    return 'file';
+  }
+
+  return 'text';
+};
 
 const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClick }) => {
   const { user } = useAuth();
   const { deleteMessageForMe, deleteMessageForEveryone } = useSocket();
   const [showMenu, setShowMenu] = useState(false);
   const [signedUrl, setSignedUrl] = useState(message.mediaUrl);
+  const [isMediaLoading, setIsMediaLoading] = useState(false);
+  const [mediaLoadError, setMediaLoadError] = useState(false);
 
   // Swipe-to-reply touch gesture state
   const [translateX, setTranslateX] = useState(0);
@@ -18,30 +57,43 @@ const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClic
 
   const isSentByMe = message.senderId === user?.id;
   const isDeleted = Boolean(message.isDeletedForEveryone);
+  const mediaType = getMediaType(message);
 
-  useEffect(() => {
-    let isMounted = true;
-    if (!isDeleted && message.mediaUrl && (message.type === 'image' || message.type === 'file')) {
-      // Skip redundant fetch if URL is blob or already signed
+  const fetchSignedUrl = () => {
+    if (!isDeleted && message.mediaUrl && mediaType !== 'text' && mediaType !== 'deleted') {
       if (message.mediaUrl.startsWith('blob:') || message.mediaUrl.includes('token=')) {
         setSignedUrl(message.mediaUrl);
+        setIsMediaLoading(false);
+        setMediaLoadError(false);
         return;
       }
+
+      setIsMediaLoading(true);
+      setMediaLoadError(false);
 
       chatApi.getSignedMediaUrl({
         conversationId: message.conversationId,
         messageId: message.id,
         mediaUrl: message.mediaUrl
       }).then(res => {
-        if (isMounted && res.data?.signedUrl) {
+        if (res.data?.signedUrl) {
           setSignedUrl(res.data.signedUrl);
+          setMediaLoadError(false);
+        } else {
+          setMediaLoadError(true);
         }
       }).catch(err => {
         console.warn('Signed URL authorization notice:', err.message);
+        setMediaLoadError(true);
+      }).finally(() => {
+        setIsMediaLoading(false);
       });
     }
-    return () => { isMounted = false; };
-  }, [message.id, message.mediaUrl, message.conversationId, message.type, isDeleted]);
+  };
+
+  useEffect(() => {
+    fetchSignedUrl();
+  }, [message.id, message.mediaUrl, message.conversationId, isDeleted, mediaType]);
 
   // Touch Gesture Event Handlers for Swipe Right to Reply
   const handleTouchStart = (e) => {
@@ -151,7 +203,7 @@ const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClic
         </div>
       )}
 
-      <div className="message-bubble" style={{ padding: (!isDeleted && message.type === 'image') ? '6px' : '10px 14px' }}>
+      <div className="message-bubble" style={{ padding: (!isDeleted && mediaType === 'image') ? '6px' : '10px 14px' }}>
         {/* DELETED MESSAGE STATE */}
         {isDeleted ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.88rem' }}>
@@ -162,24 +214,68 @@ const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClic
           <>
             {/* Reply Reference Quote */}
             {message.replyTo && (
-              <div className="reply-quote" style={{ margin: message.type === 'image' ? '4px 4px 6px' : '0 0 6px' }}>
+              <div className="reply-quote" style={{ margin: mediaType === 'image' ? '4px 4px 6px' : '0 0 6px' }}>
                 <div className="reply-author">{message.replyTo.senderName || 'Message'}</div>
                 <div className="reply-text">{message.replyTo.text}</div>
               </div>
             )}
 
-            {/* IMAGE MESSAGE TYPE */}
-            {message.type === 'image' && (
-              <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden' }}>
-                {activeMediaUrl ? (
+            {/* 1. IMAGE MEDIA MESSAGE */}
+            {mediaType === 'image' && (
+              <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', minWidth: '200px' }}>
+                {isMediaLoading ? (
+                  <div
+                    style={{
+                      width: '260px',
+                      height: '180px',
+                      background: 'rgba(255,255,255,0.05)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      color: 'var(--text-muted)'
+                    }}
+                  >
+                    <RefreshCw size={20} className="spin" />
+                    <span style={{ fontSize: '0.78rem' }}>Loading photo...</span>
+                  </div>
+                ) : mediaLoadError ? (
+                  <div
+                    style={{
+                      width: '240px',
+                      height: '140px',
+                      background: 'rgba(244, 63, 94, 0.1)',
+                      border: '1px solid rgba(244, 63, 94, 0.3)',
+                      borderRadius: '12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '6px',
+                      color: '#f43f5e',
+                      padding: '12px',
+                      textAlign: 'center'
+                    }}
+                  >
+                    <AlertCircle size={20} />
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Unable to load image</span>
+                    <button
+                      onClick={fetchSignedUrl}
+                      style={{ fontSize: '0.75rem', textDecoration: 'underline', color: 'inherit', background: 'none', border: 'none', cursor: 'pointer', marginTop: '4px' }}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : activeMediaUrl ? (
                   <img
                     src={activeMediaUrl}
-                    alt={message.fileName || 'Image'}
+                    alt={message.fileName || 'Photo'}
                     onClick={() => onImageClick(activeMediaUrl, message.fileName)}
                     style={{
                       width: '100%',
-                      maxWidth: '280px',
-                      maxHeight: '320px',
+                      maxWidth: '320px',
+                      maxHeight: '340px',
                       objectFit: 'cover',
                       borderRadius: '12px',
                       cursor: 'pointer',
@@ -247,8 +343,48 @@ const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClic
               </div>
             )}
 
-            {/* FILE / DOCUMENT MESSAGE TYPE */}
-            {message.type === 'file' && (
+            {/* 2. VIDEO MEDIA MESSAGE */}
+            {mediaType === 'video' && (
+              <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', maxWidth: '320px' }}>
+                {activeMediaUrl ? (
+                  <video
+                    src={activeMediaUrl}
+                    controls
+                    preload="metadata"
+                    style={{
+                      width: '100%',
+                      maxHeight: '320px',
+                      borderRadius: '12px',
+                      display: 'block',
+                      background: '#000'
+                    }}
+                  />
+                ) : (
+                  <div style={{ width: '260px', height: '160px', background: 'rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <RefreshCw size={20} className="spin" />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 3. AUDIO MEDIA MESSAGE */}
+            {mediaType === 'audio' && (
+              <div style={{ padding: '6px 4px', minWidth: '240px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Music size={20} style={{ color: isSentByMe ? 'white' : 'var(--primary)', flexShrink: 0 }} />
+                {activeMediaUrl ? (
+                  <audio
+                    src={activeMediaUrl}
+                    controls
+                    style={{ width: '100%', height: '36px' }}
+                  />
+                ) : (
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Loading audio...</div>
+                )}
+              </div>
+            )}
+
+            {/* 4. PDF OR GENERIC FILE DOCUMENT MESSAGE */}
+            {(mediaType === 'pdf' || mediaType === 'file') && (
               <div
                 style={{
                   display: 'flex',
@@ -307,7 +443,7 @@ const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClic
 
             {/* TEXT MESSAGE TYPE & OPTIONAL CAPTION */}
             {message.text && (
-              <div style={{ marginTop: message.type ? '6px' : '0' }}>
+              <div style={{ marginTop: mediaType !== 'text' ? '6px' : '0' }}>
                 {message.text}
               </div>
             )}
@@ -353,6 +489,18 @@ const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClic
                   }}
                 >
                   <Copy size={14} /> Copy
+                </button>
+              )}
+
+              {activeMediaUrl && (mediaType === 'image' || mediaType === 'pdf' || mediaType === 'file') && (
+                <button
+                  className="context-item"
+                  onClick={() => {
+                    handleDownloadFile();
+                    setShowMenu(false);
+                  }}
+                >
+                  <Download size={14} /> Download
                 </button>
               )}
 
