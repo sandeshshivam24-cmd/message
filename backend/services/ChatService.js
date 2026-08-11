@@ -1,4 +1,5 @@
 import { conversationRepository, messageRepository, userRepository } from '../repositories/index.js';
+import { removeFromSupabaseStorage } from '../config/storage.js';
 
 export class ChatService {
   static async getOrCreateConversation(user1Id, user2Id) {
@@ -112,5 +113,43 @@ export class ChatService {
     const updatedMsg = await messageRepository.deleteForUser(messageId, userId);
     if (!updatedMsg) throw new Error('Message not found');
     return updatedMsg;
+  }
+
+  static async deleteMessageForEveryone(messageId, userId) {
+    const existingMsg = await messageRepository.findById(messageId);
+    if (!existingMsg) throw new Error('Message not found');
+    if (existingMsg.senderId !== userId) {
+      throw new Error('Forbidden: Only the message sender can delete for everyone');
+    }
+
+    const deletedMsg = await messageRepository.deleteForEveryone(messageId, userId);
+    if (!deletedMsg) throw new Error('Failed to delete message for everyone');
+
+    // Clean up Supabase Storage if message was media
+    if (existingMsg.mediaUrl) {
+      removeFromSupabaseStorage(existingMsg.mediaUrl).catch(() => {});
+    }
+
+    return deletedMsg;
+  }
+
+  static async clearConversationForUser(conversationId, userId) {
+    const conversation = await conversationRepository.findById(conversationId);
+    if (!conversation || !conversation.participants.includes(userId)) {
+      throw new Error('Conversation not found or access denied');
+    }
+
+    const updatedConv = await conversationRepository.clearConversationForUser(conversationId, userId);
+    return updatedConv;
+  }
+
+  static async purgeExpiredMessages() {
+    const expiredMessages = await messageRepository.purgeExpiredMessages();
+    for (const msg of expiredMessages) {
+      if (msg.mediaUrl) {
+        removeFromSupabaseStorage(msg.mediaUrl).catch(() => {});
+      }
+    }
+    return expiredMessages.length;
   }
 }

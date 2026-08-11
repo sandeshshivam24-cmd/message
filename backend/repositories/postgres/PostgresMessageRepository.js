@@ -24,6 +24,8 @@ export class PostgresMessageRepository extends MessageRepository {
       status: row.status || 'sent',
       replyTo,
       deletedFor: row.deleted_for || [],
+      isDeletedForEveryone: Boolean(row.is_deleted_for_everyone),
+      expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
       createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
       updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString()
     };
@@ -31,12 +33,15 @@ export class PostgresMessageRepository extends MessageRepository {
 
   async create(messageData) {
     const id = messageData.id || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const expiresAt = messageData.expiresAt || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
     const sql = `
       INSERT INTO messages (
         id, conversation_id, sender_id, recipient_id, text, type,
-        media_url, file_name, file_size, file_type, status, reply_to, deleted_for
+        media_url, file_name, file_size, file_type, status, reply_to, deleted_for,
+        is_deleted_for_everyone, expires_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING *
     `;
     const values = [
@@ -52,7 +57,9 @@ export class PostgresMessageRepository extends MessageRepository {
       messageData.fileType || null,
       messageData.status || 'sent',
       messageData.replyTo ? JSON.stringify(messageData.replyTo) : null,
-      []
+      [],
+      false,
+      expiresAt
     ];
 
     const res = await query(sql, values);
@@ -66,10 +73,17 @@ export class PostgresMessageRepository extends MessageRepository {
 
   async findByConversationId(conversationId, userId) {
     const sql = `
-      SELECT * FROM messages
-      WHERE conversation_id = $1
-      AND (deleted_for IS NULL OR NOT ($2 = ANY(deleted_for)))
-      ORDER BY created_at ASC
+      SELECT m.* FROM messages m
+      LEFT JOIN conversations c ON c.id = m.conversation_id
+      WHERE m.conversation_id = $1
+        AND (m.deleted_for IS NULL OR NOT ($2 = ANY(m.deleted_for)))
+        AND (m.expires_at IS NULL OR m.expires_at > NOW())
+        AND (
+          c.cleared_timestamps IS NULL 
+          OR c.cleared_timestamps->$2 IS NULL 
+          OR m.created_at > (c.cleared_timestamps->>$2)::timestamptz
+        )
+      ORDER BY m.created_at ASC
     `;
     const res = await query(sql, [conversationId, userId]);
     return res.rows.map(row => this._mapMessage(row));
@@ -120,5 +134,37 @@ export class PostgresMessageRepository extends MessageRepository {
       return this.findById(messageId);
     }
     return this._mapMessage(res.rows[0]);
+  }
+
+  async deleteForEveryone(messageId, senderId) {
+    const sql = `
+      UPDATE messages
+      SET is_deleted_for_everyone = true,
+          text = 'This message was deleted',
+          type = 'text',
+          media_url = NULL,
+          file_name = NULL,
+          file_size = NULL,
+          file_type = NULL,
+          reply_to = NULL,
+          updated_at = NOW()
+      WHERE id = $1 AND sender_id = $2
+      RETURNING *
+    `;
+    const res = await query(sql, [messageId, senderId]);
+    if (res.rows.length === 0) {
+      return null;
+    }
+    return this._mapMessage(res.rows[0]);
+  }
+
+  async purgeExpiredMessages() {
+    const sql = `
+      DELETE FROM messages
+      WHERE expires_at <= NOW()
+      RETURNING *
+    `;
+    const res = await query(sql, []);
+    return res.rows.map(row => this._mapMessage(row));
   }
 }

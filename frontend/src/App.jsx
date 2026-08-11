@@ -17,6 +17,22 @@ const MainLayout = () => {
   // On mobile: if activeConversation is set, show chat view, else sidebar
   const [isMobileChatActive, setIsMobileChatActive] = useState(false);
 
+  // Dynamic visualViewport adaptation for mobile keyboards (Android Chrome)
+  useEffect(() => {
+    if (!window.visualViewport) return;
+    const handleResize = () => {
+      const vh = window.visualViewport.height;
+      document.documentElement.style.setProperty('--visual-viewport-height', `${vh}px`);
+    };
+    window.visualViewport.addEventListener('resize', handleResize);
+    window.visualViewport.addEventListener('scroll', handleResize);
+    handleResize();
+    return () => {
+      window.visualViewport.removeEventListener('resize', handleResize);
+      window.visualViewport.removeEventListener('scroll', handleResize);
+    };
+  }, []);
+
   useEffect(() => {
     if (activeConversation) {
       setIsMobileChatActive(true);

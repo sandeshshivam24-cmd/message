@@ -249,7 +249,33 @@ export const setupSocketHandlers = (io) => {
         await ChatService.deleteMessageForUser(messageId, userId);
         socket.emit('message_deleted_for_me', { messageId, conversationId });
       } catch (err) {
-        console.error('Delete message error:', err);
+        console.error('Delete message for me error:', err);
+      }
+    });
+
+    // --- DELETE FOR EVERYONE ---
+    socket.on('delete_message_for_everyone', async ({ messageId, conversationId }) => {
+      try {
+        const deletedMsg = await ChatService.deleteMessageForEveryone(messageId, userId);
+        if (deletedMsg) {
+          io.to(`conversation:${conversationId}`).emit('message_deleted_for_everyone', {
+            messageId,
+            conversationId,
+            message: deletedMsg
+          });
+        }
+      } catch (err) {
+        console.error('Delete message for everyone error:', err.message);
+      }
+    });
+
+    // --- CLEAR CHAT FOR ME ---
+    socket.on('clear_chat', async ({ conversationId }) => {
+      try {
+        await ChatService.clearConversationForUser(conversationId, userId);
+        socket.emit('chat_cleared', { conversationId });
+      } catch (err) {
+        console.error('Clear chat error:', err.message);
       }
     });
 

@@ -26,6 +26,7 @@ export class InMemoryConversationRepository extends ConversationRepository {
       id,
       participants: [user1Id, user2Id],
       lastMessage: null,
+      clearedTimestamps: {},
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -65,6 +66,20 @@ export class InMemoryConversationRepository extends ConversationRepository {
     } : null;
 
     conv.updatedAt = new Date().toISOString();
+    this.conversations.set(conversationId, conv);
+    return { ...conv };
+  }
+
+  async clearConversationForUser(conversationId, userId) {
+    const conv = this.conversations.get(conversationId);
+    if (!conv) return null;
+
+    if (!conv.clearedTimestamps) {
+      conv.clearedTimestamps = {};
+    }
+    conv.clearedTimestamps[userId] = new Date().toISOString();
+    conv.updatedAt = new Date().toISOString();
+
     this.conversations.set(conversationId, conv);
     return { ...conv };
   }

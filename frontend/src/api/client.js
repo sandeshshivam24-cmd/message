@@ -50,7 +50,9 @@ export const chatApi = {
     }
   }),
   getSignedMediaUrl: (params) => api.get('/chat/media/signed-url', { params }),
-  deleteMessageForMe: (messageId) => api.delete(`/chat/messages/${messageId}`)
+  deleteMessageForMe: (messageId) => api.delete(`/chat/messages/${messageId}`),
+  deleteMessageForEveryone: (messageId) => api.delete(`/chat/messages/${messageId}/everyone`),
+  clearChat: (conversationId) => api.post(`/chat/conversations/${conversationId}/clear`)
 };
 
 export const privacyApi = {

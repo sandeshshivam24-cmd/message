@@ -179,6 +179,26 @@ export const SocketProvider = ({ children }) => {
       fetchConversations();
     });
 
+    // Message deleted for everyone event
+    newSocket.on('message_deleted_for_everyone', ({ messageId, conversationId: msgConvId, message: updatedMsg }) => {
+      const currentActive = activeConvRef.current;
+      if (currentActive && currentActive.id === msgConvId) {
+        setMessages(prev =>
+          prev.map(m => m.id === messageId ? { ...m, ...updatedMsg, isDeletedForEveryone: true } : m)
+        );
+      }
+      fetchConversations();
+    });
+
+    // Chat cleared event
+    newSocket.on('chat_cleared', ({ conversationId: msgConvId }) => {
+      const currentActive = activeConvRef.current;
+      if (currentActive && currentActive.id === msgConvId) {
+        setMessages([]);
+      }
+      fetchConversations();
+    });
+
     return () => {
       newSocket.off('connect');
       newSocket.off('disconnect');
@@ -189,6 +209,8 @@ export const SocketProvider = ({ children }) => {
       newSocket.off('messages_status_changed');
       newSocket.off('user_typing');
       newSocket.off('message_deleted_for_me');
+      newSocket.off('message_deleted_for_everyone');
+      newSocket.off('chat_cleared');
       newSocket.disconnect();
     };
   }, [token, user?.id]);
@@ -340,6 +362,28 @@ export const SocketProvider = ({ children }) => {
     }
   };
 
+  // Delete message for everyone (sender only)
+  const deleteMessageForEveryone = (messageId) => {
+    if (socket && activeConversation) {
+      socket.emit('delete_message_for_everyone', { messageId, conversationId: activeConversation.id });
+    }
+  };
+
+  // Clear chat history for current user
+  const clearChat = async (conversationId) => {
+    if (!conversationId) return;
+    try {
+      await chatApi.clearChat(conversationId);
+      if (socket) {
+        socket.emit('clear_chat', { conversationId });
+      }
+      setMessages([]);
+      fetchConversations();
+    } catch (err) {
+      console.error('Clear chat error:', err);
+    }
+  };
+
   return (
     <SocketContext.Provider
       value={{
@@ -357,6 +401,8 @@ export const SocketProvider = ({ children }) => {
         startTyping,
         stopTyping,
         deleteMessageForMe,
+        deleteMessageForEveryone,
+        clearChat,
         fetchConversations
       }}
     >

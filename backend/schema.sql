@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     id VARCHAR(100) PRIMARY KEY,
     participants TEXT[] NOT NULL,
     last_message JSONB,
+    cleared_timestamps JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -34,6 +35,8 @@ CREATE TABLE IF NOT EXISTS messages (
     status VARCHAR(50) DEFAULT 'sent',
     reply_to JSONB,
     deleted_for TEXT[] DEFAULT '{}',
+    is_deleted_for_everyone BOOLEAN DEFAULT false,
+    expires_at TIMESTAMPTZ DEFAULT (CURRENT_TIMESTAMP + INTERVAL '24 hours'),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -72,4 +75,5 @@ CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_id);
+CREATE INDEX IF NOT EXISTS idx_messages_expires_at ON messages(expires_at);
 CREATE INDEX IF NOT EXISTS idx_conversations_participants ON conversations USING GIN(participants);

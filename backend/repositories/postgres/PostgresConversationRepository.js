@@ -10,10 +10,18 @@ export class PostgresConversationRepository extends ConversationRepository {
         lastMessage = JSON.parse(lastMessage);
       } catch (e) {}
     }
+    let clearedTimestamps = row.cleared_timestamps || {};
+    if (typeof clearedTimestamps === 'string') {
+      try {
+        clearedTimestamps = JSON.parse(clearedTimestamps);
+      } catch (e) {}
+    }
+
     return {
       id: row.id,
       participants: row.participants || [],
       lastMessage,
+      clearedTimestamps,
       createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
       updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString()
     };
@@ -51,6 +59,12 @@ export class PostgresConversationRepository extends ConversationRepository {
             AND m.recipient_id = $1
             AND m.status != 'seen'
             AND (m.deleted_for IS NULL OR NOT ($1 = ANY(m.deleted_for)))
+            AND (m.expires_at IS NULL OR m.expires_at > NOW())
+            AND (
+              c.cleared_timestamps IS NULL 
+              OR c.cleared_timestamps->$1 IS NULL 
+              OR m.created_at > (c.cleared_timestamps->>$1)::timestamptz
+            )
         ) as unread_count
       FROM conversations c
       WHERE $1 = ANY(c.participants)
@@ -67,14 +81,15 @@ export class PostgresConversationRepository extends ConversationRepository {
   async create(conversationData) {
     const id = conversationData.id || `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const sql = `
-      INSERT INTO conversations (id, participants, last_message, created_at, updated_at)
-      VALUES ($1, $2, $3, NOW(), NOW())
+      INSERT INTO conversations (id, participants, last_message, cleared_timestamps, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, NOW(), NOW())
       RETURNING *
     `;
     const values = [
       id,
       conversationData.participants,
-      conversationData.lastMessage ? JSON.stringify(conversationData.lastMessage) : null
+      conversationData.lastMessage ? JSON.stringify(conversationData.lastMessage) : null,
+      JSON.stringify(conversationData.clearedTimestamps || {})
     ];
     const res = await query(sql, values);
     return this._mapConversation(res.rows[0]);
@@ -88,6 +103,19 @@ export class PostgresConversationRepository extends ConversationRepository {
       RETURNING *
     `;
     const res = await query(sql, [JSON.stringify(messageData), conversationId]);
+    return this._mapConversation(res.rows[0]);
+  }
+
+  async clearConversationForUser(conversationId, userId) {
+    const nowIso = new Date().toISOString();
+    const sql = `
+      UPDATE conversations
+      SET cleared_timestamps = jsonb_set(COALESCE(cleared_timestamps, '{}'::jsonb), ARRAY[$2], to_jsonb($3::text)),
+          updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `;
+    const res = await query(sql, [conversationId, userId, nowIso]);
     return this._mapConversation(res.rows[0]);
   }
 }

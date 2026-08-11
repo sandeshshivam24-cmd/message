@@ -116,6 +116,10 @@ export const getSignedMediaUrl = async (req, res) => {
 
     // User is authorized! Generate short-lived signed URL (1 hour expiry)
     const result = await generateSignedUrl(mediaUrl, 3600);
+    if (!result || !result.signedUrl) {
+      return res.status(500).json({ message: 'Failed to generate signed URL for storage resource' });
+    }
+
     res.status(200).json({
       success: true,
       signedUrl: result.signedUrl,
@@ -131,6 +135,26 @@ export const deleteMessageForMe = async (req, res) => {
   try {
     const { messageId } = req.params;
     const result = await ChatService.deleteMessageForUser(messageId, req.user.id);
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+};
+
+export const deleteMessageForEveryone = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const result = await ChatService.deleteMessageForEveryone(messageId, req.user.id);
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+};
+
+export const clearConversation = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const result = await ChatService.clearConversationForUser(conversationId, req.user.id);
     res.status(200).json(result);
   } catch (error) {
     res.status(400).json({ message: error.message });

@@ -17,6 +17,7 @@ import { setupSocketHandlers } from './sockets/socketHandler.js';
 import { apiLimiter, authLimiter } from './middleware/rateLimiter.js';
 import { initializeDatabase } from './config/db.js';
 import { initializeStorageBucket } from './config/storage.js';
+import { ChatService } from './services/ChatService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -77,7 +78,7 @@ app.get('/api/health', (req, res) => {
     architecture: process.env.DATABASE_URL ? 'Repository Pattern (Supabase PostgreSQL Active)' : 'Repository Pattern (In-Memory Active)',
     databaseConnected: Boolean(process.env.DATABASE_URL),
     storageProvider: 'Supabase Storage Bucket',
-    version: '3.3.0'
+    version: '3.4.0'
   });
 });
 
@@ -115,6 +116,18 @@ const startServer = async () => {
       await initializeDatabase();
     }
     await initializeStorageBucket();
+
+    // Start 15-minute periodic server cleanup for 24-hour expired messages
+    setInterval(async () => {
+      try {
+        const count = await ChatService.purgeExpiredMessages();
+        if (count > 0) {
+          console.log(`🧹 Periodic Cleanup: Purged ${count} expired message(s) (>24h old).`);
+        }
+      } catch (err) {
+        console.error('Error during periodic message purge:', err.message);
+      }
+    }, 15 * 60 * 1000);
 
     server.listen(PORT, () => {
       console.log(`=======================================================`);

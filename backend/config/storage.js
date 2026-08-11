@@ -43,18 +43,28 @@ export const initializeStorageBucket = async () => {
 export const generateSignedUrl = async (storagePath, expiresIn = 3600) => {
   if (!storagePath) return null;
 
-  // Extract relative storage path if full URL is passed
+  // Clean relative storage path if full URL or absolute path is passed
   let cleanPath = storagePath;
-  if (cleanPath.includes('/object/public/') || cleanPath.includes('/object/authenticated/') || cleanPath.includes('/object/sign/')) {
+
+  if (cleanPath.includes(`${BUCKET_NAME}/`)) {
     const parts = cleanPath.split(`${BUCKET_NAME}/`);
     if (parts.length > 1) {
-      cleanPath = parts[1].split('?')[0];
+      cleanPath = parts[1];
     }
   }
 
-  if (cleanPath.startsWith('/')) {
-    cleanPath = cleanPath.substring(1);
+  if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
+    try {
+      const parsed = new URL(cleanPath);
+      const pathname = parsed.pathname;
+      const parts = pathname.split(`${BUCKET_NAME}/`);
+      if (parts.length > 1) {
+        cleanPath = parts[1];
+      }
+    } catch (e) {}
   }
+
+  cleanPath = cleanPath.split('?')[0].replace(/^\/+/, '');
 
   if (supabase) {
     try {
@@ -68,16 +78,15 @@ export const generateSignedUrl = async (storagePath, expiresIn = 3600) => {
           expiresAt: Date.now() + (expiresIn * 1000)
         };
       }
+      if (error) {
+        console.warn('Supabase createSignedUrl error:', error.message);
+      }
     } catch (err) {
       console.warn('Failed to generate Supabase signed URL:', err.message);
     }
   }
 
-  // Fallback signature URL format
-  return {
-    signedUrl: `${supabaseUrl}/storage/v1/object/sign/${BUCKET_NAME}/${cleanPath}?token=auth_token_sig_${Date.now()}`,
-    expiresAt: Date.now() + (expiresIn * 1000)
-  };
+  return null;
 };
 
 /**
@@ -123,4 +132,24 @@ export const uploadToSupabaseStorage = async ({ fileBuffer, originalName, mimeTy
     url: storageUrl,
     type
   };
+};
+
+/**
+ * Safely removes a file from PRIVATE Supabase Storage if no longer referenced
+ */
+export const removeFromSupabaseStorage = async (storagePath) => {
+  if (!supabase || !storagePath) return false;
+  try {
+    let cleanPath = storagePath;
+    if (cleanPath.includes(`${BUCKET_NAME}/`)) {
+      cleanPath = cleanPath.split(`${BUCKET_NAME}/`)[1];
+    }
+    cleanPath = cleanPath.split('?')[0].replace(/^\/+/, '');
+    
+    await supabase.storage.from(BUCKET_NAME).remove([cleanPath]);
+    return true;
+  } catch (err) {
+    console.warn('Failed to remove object from Supabase Storage:', err.message);
+    return false;
+  }
 };

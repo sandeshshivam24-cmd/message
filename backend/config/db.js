@@ -42,13 +42,21 @@ export const initializeDatabase = async () => {
     const client = await pool.connect();
     console.log('✅ Supabase PostgreSQL connected successfully!');
 
-    // Read and execute schema migration file
+    // Read and execute base schema file
     const schemaPath = path.join(__dirname, '..', 'schema.sql');
     if (fs.existsSync(schemaPath)) {
       const sql = fs.readFileSync(schemaPath, 'utf8');
       await client.query(sql);
-      console.log('✅ PostgreSQL Schema initialized/migrated successfully!');
+      console.log('✅ PostgreSQL Base Schema initialized successfully!');
     }
+
+    // Apply idempotent column migrations for existing databases
+    await client.query(`
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_deleted_for_everyone BOOLEAN DEFAULT false;
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ DEFAULT (CURRENT_TIMESTAMP + INTERVAL '24 hours');
+      ALTER TABLE conversations ADD COLUMN IF NOT EXISTS cleared_timestamps JSONB DEFAULT '{}'::jsonb;
+    `);
+    console.log('✅ PostgreSQL Schema migrations applied successfully!');
 
     client.release();
     return true;
