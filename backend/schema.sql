@@ -41,6 +41,11 @@ CREATE TABLE IF NOT EXISTS messages (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Idempotent column migrations for pre-existing tables
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_deleted_for_everyone BOOLEAN DEFAULT false;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ DEFAULT (CURRENT_TIMESTAMP + INTERVAL '24 hours');
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS cleared_timestamps JSONB DEFAULT '{}'::jsonb;
+
 CREATE TABLE IF NOT EXISTS media (
     id VARCHAR(100) PRIMARY KEY,
     filename VARCHAR(255) NOT NULL,
@@ -70,7 +75,7 @@ CREATE TABLE IF NOT EXISTS reports (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- Indexes for maximum query performance
+-- Indexes for maximum query performance (Executed after ALTER TABLE ensures columns exist)
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
