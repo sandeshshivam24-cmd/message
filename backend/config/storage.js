@@ -79,14 +79,18 @@ export const generateSignedUrl = async (storagePath, expiresIn = 3600) => {
         };
       }
       if (error) {
-        console.warn('Supabase createSignedUrl error:', error.message);
+        console.warn('Supabase createSignedUrl notice:', error.message);
       }
     } catch (err) {
       console.warn('Failed to generate Supabase signed URL:', err.message);
     }
   }
 
-  return null;
+  // Graceful fallback for local static files or un-migrated media paths
+  return {
+    signedUrl: storagePath,
+    expiresAt: null
+  };
 };
 
 /**
@@ -149,7 +153,7 @@ export const removeFromSupabaseStorage = async (storagePath) => {
     await supabase.storage.from(BUCKET_NAME).remove([cleanPath]);
     return true;
   } catch (err) {
-    console.warn('Failed to remove object from Supabase Storage:', err.message);
+    console.warn('Failed to remove from Supabase Storage:', err.message);
     return false;
   }
 };
