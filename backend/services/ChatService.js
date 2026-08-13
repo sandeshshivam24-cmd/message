@@ -1,72 +1,72 @@
-import { conversationRepository, messageRepository, userRepository } from '../repositories/index.js';
+import {
+  userRepository,
+  messageRepository,
+  conversationRepository,
+  mediaRepository
+} from '../repositories/index.js';
 import { removeFromSupabaseStorage } from '../config/storage.js';
 
 export class ChatService {
-  static async getOrCreateConversation(user1Id, user2Id) {
-    if (!user2Id) throw new Error('Recipient ID is required');
-    if (user1Id === user2Id) throw new Error('Cannot create conversation with yourself');
-
-    const recipient = await userRepository.findById(user2Id);
-    if (!recipient) throw new Error('Recipient user not found');
-
-    const conversation = await conversationRepository.findOrCreate(user1Id, user2Id);
-    const { passwordHash: _, ...sanitizedRecipient } = recipient;
-
-    return {
-      ...conversation,
-      recipient: sanitizedRecipient
-    };
-  }
-
   static async getUserConversations(userId) {
-    const rawConversations = await conversationRepository.findByUserId(userId);
-    const result = [];
-
-    for (const conv of rawConversations) {
-      const otherUserId = conv.participants.find(p => p !== userId);
-      const otherUser = await userRepository.findById(otherUserId);
-      
-      let unreadCount = 0;
-      const messages = await messageRepository.findByConversationId(conv.id, userId);
-      
-      for (const m of messages) {
-        if (m.recipientId === userId && m.status !== 'seen') {
-          unreadCount++;
+    const conversations = await conversationRepository.findByUserId(userId);
+    
+    // Attach recipient user details to each conversation
+    const result = await Promise.all(
+      conversations.map(async (conv) => {
+        const recipientId = conv.participants.find(id => id !== userId);
+        const recipient = recipientId ? await userRepository.findById(recipientId) : null;
+        
+        let recipientData = null;
+        if (recipient) {
+          recipientData = {
+            id: recipient.id,
+            username: recipient.username,
+            displayName: recipient.displayName,
+            avatarUrl: recipient.avatarUrl,
+            statusMessage: recipient.statusMessage,
+            isOnline: recipient.isOnline,
+            lastSeen: recipient.lastSeen
+          };
         }
-      }
 
-      if (otherUser) {
-        const { passwordHash: _, ...sanitizedUser } = otherUser;
-        result.push({
-          ...conv,
-          recipient: sanitizedUser,
-          unreadCount
-        });
-      }
-    }
+        return {
+          id: conv.id,
+          participants: conv.participants,
+          recipient: recipientData,
+          lastMessage: conv.lastMessage,
+          unreadCount: 0,
+          updatedAt: conv.updatedAt
+        };
+      })
+    );
 
     return result;
   }
 
+  static async getOrCreateConversation(userAId, userBId) {
+    if (userAId === userBId) {
+      throw new Error('Cannot create conversation with yourself');
+    }
+
+    let conv = await conversationRepository.findByParticipants(userAId, userBId);
+    if (!conv) {
+      conv = await conversationRepository.create([userAId, userBId]);
+    }
+    return conv;
+  }
+
   static async getConversationMessages(conversationId, userId) {
-    const conversation = await conversationRepository.findById(conversationId);
-    if (!conversation || !conversation.participants.includes(userId)) {
+    const conv = await conversationRepository.findById(conversationId);
+    if (!conv || !conv.participants.includes(userId)) {
       throw new Error('Conversation not found or access denied');
     }
 
-    return await messageRepository.findByConversationId(conversationId, userId);
+    const clearedTimestamp = conv.clearedTimestamps ? conv.clearedTimestamps[userId] : null;
+    return await messageRepository.findByConversationId(conversationId, userId, clearedTimestamp);
   }
 
-  static async sendMessage({ senderId, conversationId, text, type = 'text', mediaUrl, fileName, fileSize, fileType, replyTo }) {
-    if (type === 'text' && (!text || !text.trim())) {
-      throw new Error('Message text cannot be empty');
-    }
-
-    let conv = null;
-    if (conversationId) {
-      conv = await conversationRepository.findById(conversationId);
-    }
-
+  static async sendMessage({ senderId, conversationId, text, type, mediaUrl, fileName, fileSize, fileType, replyTo }) {
+    const conv = await conversationRepository.findById(conversationId);
     if (!conv) {
       throw new Error('Conversation not found');
     }
@@ -118,11 +118,15 @@ export class ChatService {
   static async deleteMessageForEveryone(messageId, userId) {
     const existingMsg = await messageRepository.findById(messageId);
     if (!existingMsg) throw new Error('Message not found');
-    if (existingMsg.senderId !== userId) {
-      throw new Error('Forbidden: Only the message sender can delete for everyone');
+
+    // Verify requesting user is a participant of the conversation (Sender OR Recipient)
+    const conversation = await conversationRepository.findById(existingMsg.conversationId);
+    if (!conversation || !conversation.participants.includes(userId)) {
+      throw new Error('Forbidden: Access denied to conversation message');
     }
 
-    const deletedMsg = await messageRepository.deleteForEveryone(messageId, userId);
+    // Permanently remove message record from database for everyone
+    const deletedMsg = await messageRepository.deleteForEveryone(messageId);
     if (!deletedMsg) throw new Error('Failed to delete message for everyone');
 
     // Clean up Supabase Storage if message was media
@@ -130,7 +134,12 @@ export class ChatService {
       removeFromSupabaseStorage(existingMsg.mediaUrl).catch(() => {});
     }
 
-    return deletedMsg;
+    // If deleted message was the last message preview, update conversation preview
+    const remainingMsgs = await messageRepository.findByConversationId(existingMsg.conversationId, userId);
+    const newLastMsg = remainingMsgs.length > 0 ? remainingMsgs[remainingMsgs.length - 1] : null;
+    await conversationRepository.updateLastMessage(existingMsg.conversationId, newLastMsg);
+
+    return { messageId, conversationId: existingMsg.conversationId };
   }
 
   static async clearConversationForUser(conversationId, userId) {
@@ -138,18 +147,19 @@ export class ChatService {
     if (!conversation || !conversation.participants.includes(userId)) {
       throw new Error('Conversation not found or access denied');
     }
-
-    const updatedConv = await conversationRepository.clearConversationForUser(conversationId, userId);
-    return updatedConv;
+    return await conversationRepository.clearConversationForUser(conversationId, userId);
   }
 
   static async purgeExpiredMessages() {
     const expiredMessages = await messageRepository.purgeExpiredMessages();
+    
+    // Asynchronously clean up media files from Supabase Storage for expired messages
     for (const msg of expiredMessages) {
       if (msg.mediaUrl) {
         removeFromSupabaseStorage(msg.mediaUrl).catch(() => {});
       }
     }
+
     return expiredMessages.length;
   }
 }

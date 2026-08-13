@@ -131,21 +131,10 @@ export class InMemoryMessageRepository extends MessageRepository {
     return { ...msg };
   }
 
-  async deleteForEveryone(messageId, senderId) {
+  async deleteForEveryone(messageId) {
     const msg = this.messages.get(messageId);
-    if (!msg || msg.senderId !== senderId) return null;
-
-    msg.isDeletedForEveryone = true;
-    msg.text = 'This message was deleted';
-    msg.type = 'text';
-    msg.mediaUrl = null;
-    msg.fileName = null;
-    msg.fileSize = null;
-    msg.fileType = null;
-    msg.replyTo = null;
-    msg.updatedAt = new Date().toISOString();
-
-    this.messages.set(messageId, msg);
+    if (!msg) return null;
+    this.messages.delete(messageId);
     return { ...msg };
   }
 

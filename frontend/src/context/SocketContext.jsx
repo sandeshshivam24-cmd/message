@@ -1,172 +1,119 @@
-import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
-import { chatApi, BACKEND_SERVER_URL } from '../api/client';
-import { playMessageChime } from '../utils/audioSynth';
+import { chatApi } from '../api/client';
 
 const SocketContext = createContext(null);
 
 export const SocketProvider = ({ children }) => {
   const { token, user } = useAuth();
   const [socket, setSocket] = useState(null);
-  const [connectionStatus, setConnectionStatus] = useState('disconnected'); // 'connected' | 'connecting' | 'disconnected'
-  const [onlineUserIds, setOnlineUserIds] = useState(new Set());
   const [conversations, setConversations] = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
   const [messages, setMessages] = useState([]);
-  const [typingUsers, setTypingUsers] = useState({}); // { conversationId: { userId, isTyping } }
+  const [onlineUserIds, setOnlineUserIds] = useState(new Set());
+  const [typingUsers, setTypingUsers] = useState({}); // Key: conversationId, Value: userId
+  const [connectionStatus, setConnectionStatus] = useState('disconnected');
 
   const activeConvRef = useRef(activeConversation);
-  activeConvRef.current = activeConversation;
+  useEffect(() => {
+    activeConvRef.current = activeConversation;
+  }, [activeConversation]);
 
-  // Initialize socket when token changes
+  // Connect to Socket.IO server when user is authenticated
   useEffect(() => {
     if (!token || !user) {
       if (socket) {
         socket.disconnect();
         setSocket(null);
-        setConnectionStatus('disconnected');
       }
+      setConnectionStatus('disconnected');
       return;
     }
 
+    const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
     setConnectionStatus('connecting');
-    const newSocket = io(BACKEND_SERVER_URL, {
-      auth: { token },
-      autoConnect: true,
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000,
-      transports: ['websocket', 'polling']
-    });
 
-    setSocket(newSocket);
+    const newSocket = io(SOCKET_URL, {
+      auth: { token },
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000
+    });
 
     newSocket.on('connect', () => {
       setConnectionStatus('connected');
+
+      // Join room for active conversation if already selected
+      if (activeConvRef.current) {
+        newSocket.emit('join_conversation', { conversationId: activeConvRef.current.id });
+      }
     });
 
     newSocket.on('disconnect', () => {
       setConnectionStatus('disconnected');
     });
 
-    newSocket.on('connect_error', () => {
-      setConnectionStatus('connecting');
+    newSocket.on('connect_error', (err) => {
+      console.warn('Socket connection notice:', err.message);
+      setConnectionStatus('error');
     });
 
-    // Initial presence setup
+    // Presence updates
     newSocket.on('initial_presence_state', ({ onlineUserIds: ids }) => {
       setOnlineUserIds(new Set(ids));
     });
 
-    // Realtime presence changes (user online/offline)
-    newSocket.on('user_presence_change', ({ userId: pUserId, isOnline, lastSeen }) => {
+    newSocket.on('user_presence_change', ({ userId, isOnline }) => {
       setOnlineUserIds(prev => {
         const updated = new Set(prev);
-        if (isOnline) {
-          updated.add(pUserId);
-        } else {
-          updated.delete(pUserId);
-        }
+        if (isOnline) updated.add(userId);
+        else updated.delete(userId);
         return updated;
       });
-
-      // Update recipient status in active conversation if matching
-      setActiveConversation(prev => {
-        if (prev && prev.recipient && prev.recipient.id === pUserId) {
-          return {
-            ...prev,
-            recipient: {
-              ...prev.recipient,
-              isOnline,
-              lastSeen: lastSeen || prev.recipient.lastSeen
-            }
-          };
-        }
-        return prev;
-      });
-
-      // Update recipient status in conversation list
-      setConversations(prevConvs =>
-        prevConvs.map(conv => {
-          if (conv.recipient && conv.recipient.id === pUserId) {
-            return {
-              ...conv,
-              recipient: {
-                ...conv.recipient,
-                isOnline,
-                lastSeen: lastSeen || conv.recipient.lastSeen
-              }
-            };
-          }
-          return conv;
-        })
-      );
-    });
-
-    // Receive Message (Realtime Socket Event)
-    newSocket.on('receive_message', ({ message, conversationId: msgConvId, tempId }) => {
-      const currentActive = activeConvRef.current;
-
-      // Audio and Desktop Notification if received from another user
-      if (message.senderId !== user.id) {
-        const isSoundEnabled = localStorage.getItem('messenger_sound') !== 'false';
-        if (isSoundEnabled) playMessageChime();
-
-        const isNotifEnabled = localStorage.getItem('messenger_notifications') !== 'false';
-        if (isNotifEnabled && Notification.permission === 'granted' && document.hidden) {
-          new Notification('New Message', {
-            body: message.type === 'image' ? '📷 Sent an image' : message.type === 'file' ? '📎 Sent a file' : message.text,
-            icon: '/favicon.ico'
-          });
-        }
-      }
-
-      // Deduplication & Append to active conversation if viewing
-      if (currentActive && currentActive.id === msgConvId) {
-        setMessages(prev => {
-          // Check if tempId exists to deduplicate
-          if (tempId && prev.some(m => m.tempId === tempId || m.id === tempId)) {
-            return prev.map(m => (m.tempId === tempId || m.id === tempId) ? message : m);
-          }
-          // Check if message ID already exists
-          if (prev.some(m => m.id === message.id)) {
-            return prev.map(m => m.id === message.id ? message : m);
-          }
-          return [...prev, message];
-        });
-
-        // Auto mark seen if recipient is current user viewing chat
-        if (message.recipientId === user.id) {
-          newSocket.emit('mark_seen', { conversationId: msgConvId });
-        }
-      }
-
-      // Update conversations list (last message & unread count)
+      // Refresh conversations list to update online status dots
       fetchConversations();
     });
 
-    // Message Status Changed (sent -> delivered -> seen)
+    // Real-time message receiver
+    newSocket.on('receive_message', ({ message, conversationId: msgConvId }) => {
+      const currentActive = activeConvRef.current;
+      if (currentActive && currentActive.id === msgConvId) {
+        setMessages(prev => {
+          // If optimistic message exists with tempId, replace it
+          if (message.tempId) {
+            return prev.map(m => m.tempId === message.tempId ? message : m);
+          }
+          // Avoid duplicate messages
+          if (prev.some(m => m.id === message.id)) return prev;
+          return [...prev, message];
+        });
+
+        // Automatically send read receipt if recipient is actively viewing this chat
+        if (message.senderId !== user.id) {
+          newSocket.emit('mark_seen', { conversationId: msgConvId });
+        }
+      }
+      fetchConversations();
+    });
+
+    // Status updates (sent -> delivered -> seen)
     newSocket.on('messages_status_changed', ({ conversationId: msgConvId, status, messageIds }) => {
       const currentActive = activeConvRef.current;
       if (currentActive && currentActive.id === msgConvId) {
         setMessages(prev =>
-          prev.map(m => {
-            if (messageIds.includes(m.id)) {
-              return { ...m, status };
-            }
-            return m;
-          })
+          prev.map(m => messageIds.includes(m.id) ? { ...m, status } : m)
         );
       }
       fetchConversations();
     });
 
-    // Typing Event
-    newSocket.on('user_typing', ({ conversationId: msgConvId, userId: typingUserId, isTyping }) => {
+    // Typing indicators
+    newSocket.on('user_typing', ({ conversationId: msgConvId, userId, isTyping }) => {
       setTypingUsers(prev => ({
         ...prev,
-        [msgConvId]: isTyping ? typingUserId : null
+        [msgConvId]: isTyping ? userId : null
       }));
     });
 
@@ -179,13 +126,11 @@ export const SocketProvider = ({ children }) => {
       fetchConversations();
     });
 
-    // Message deleted for everyone event
-    newSocket.on('message_deleted_for_everyone', ({ messageId, conversationId: msgConvId, message: updatedMsg }) => {
+    // Message deleted for everyone event (permanently removes message from state & DOM)
+    newSocket.on('message_deleted_for_everyone', ({ messageId, conversationId: msgConvId }) => {
       const currentActive = activeConvRef.current;
       if (currentActive && currentActive.id === msgConvId) {
-        setMessages(prev =>
-          prev.map(m => m.id === messageId ? { ...m, ...updatedMsg, isDeletedForEveryone: true } : m)
-        );
+        setMessages(prev => prev.filter(m => m.id !== messageId));
       }
       fetchConversations();
     });
@@ -198,6 +143,8 @@ export const SocketProvider = ({ children }) => {
       }
       fetchConversations();
     });
+
+    setSocket(newSocket);
 
     return () => {
       newSocket.off('connect');
@@ -221,7 +168,7 @@ export const SocketProvider = ({ children }) => {
       const res = await chatApi.getConversations();
       setConversations(res.data);
     } catch (err) {
-      console.error('Failed to load conversations:', err);
+      console.error('Failed to fetch conversations:', err);
     }
   };
 
@@ -231,12 +178,8 @@ export const SocketProvider = ({ children }) => {
     }
   }, [token]);
 
-  // Select Active Conversation
+  // Select active conversation and load messages
   const selectConversation = async (conv) => {
-    if (activeConversation && socket) {
-      socket.emit('leave_conversation', { conversationId: activeConversation.id });
-    }
-
     setActiveConversation(conv);
     if (!conv) {
       setMessages([]);
@@ -244,143 +187,60 @@ export const SocketProvider = ({ children }) => {
     }
 
     try {
-      // Load messages via REST
       const res = await chatApi.getMessages(conv.id);
       setMessages(res.data);
 
-      // Join socket room
       if (socket) {
         socket.emit('join_conversation', { conversationId: conv.id });
+        socket.emit('mark_seen', { conversationId: conv.id });
       }
-
-      // Reset unread count locally
-      setConversations(prev =>
-        prev.map(c => c.id === conv.id ? { ...c, unreadCount: 0 } : c)
-      );
     } catch (err) {
-      console.error('Failed to load conversation messages:', err);
+      console.error('Failed to fetch messages:', err);
     }
   };
 
-  // Start direct conversation with user from search
-  const startConversationWithUser = async (targetUser) => {
-    try {
-      const res = await chatApi.getOrCreateConversation(targetUser.id);
-      const convData = res.data;
-      await fetchConversations();
-      await selectConversation(convData);
-      return convData;
-    } catch (err) {
-      console.error('Failed to start conversation:', err);
-    }
-  };
-
-  // Send message (text or media) via socket
-  const sendMessage = (options, legacyReplyTo = null) => {
-    let payload = {};
-    if (typeof options === 'string') {
-      payload = { text: options, replyTo: legacyReplyTo, type: 'text' };
-    } else {
-      payload = options;
-    }
-
-    const {
-      text = '',
-      type = 'text',
-      mediaUrl = null,
-      fileName = null,
-      fileSize = null,
-      fileType = null,
-      replyTo = null,
-      tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`
-    } = payload;
-
-    if (!activeConversation || !socket) return;
-    if (type === 'text' && !text.trim()) return;
-
-    const newOptimisticMsg = {
-      id: tempId,
-      tempId,
-      conversationId: activeConversation.id,
-      senderId: user.id,
-      recipientId: activeConversation.recipient.id,
-      text: text ? text.trim() : '',
-      type,
-      mediaUrl,
-      fileName,
-      fileSize,
-      fileType,
-      replyTo,
-      status: 'sent',
-      createdAt: new Date().toISOString()
-    };
-
-    // Optimistically update messages UI
-    setMessages(prev => {
-      if (prev.some(m => m.id === tempId || m.tempId === tempId)) {
-        return prev.map(m => (m.id === tempId || m.tempId === tempId) ? newOptimisticMsg : m);
-      }
-      return [...prev, newOptimisticMsg];
-    });
+  // Send message
+  const sendMessage = (messageData) => {
+    if (!socket || !activeConversation) return;
 
     socket.emit('send_message', {
       conversationId: activeConversation.id,
       recipientId: activeConversation.recipient.id,
-      text: text ? text.trim() : '',
-      type,
-      mediaUrl,
-      fileName,
-      fileSize,
-      fileType,
-      replyTo,
-      tempId
-    }, (response) => {
-      if (response && response.error) {
-        console.error('Send message failed:', response.error);
-        setMessages(prev => prev.filter(m => m.tempId !== tempId && m.id !== tempId));
-      }
+      ...messageData
     });
   };
 
-  // Typing triggers
+  // Typing controls
   const startTyping = () => {
-    if (activeConversation && socket) {
+    if (socket && activeConversation) {
       socket.emit('typing_start', { conversationId: activeConversation.id });
     }
   };
 
   const stopTyping = () => {
-    if (activeConversation && socket) {
+    if (socket && activeConversation) {
       socket.emit('typing_stop', { conversationId: activeConversation.id });
     }
   };
 
-  // Delete message for current user
+  // Delete message for me
   const deleteMessageForMe = (messageId) => {
     if (socket && activeConversation) {
       socket.emit('delete_message_for_me', { messageId, conversationId: activeConversation.id });
     }
   };
 
-  // Delete message for everyone (sender only)
+  // Delete message for everyone
   const deleteMessageForEveryone = (messageId) => {
     if (socket && activeConversation) {
       socket.emit('delete_message_for_everyone', { messageId, conversationId: activeConversation.id });
     }
   };
 
-  // Clear chat history for current user
-  const clearChat = async (conversationId) => {
-    if (!conversationId) return;
-    try {
-      await chatApi.clearChat(conversationId);
-      if (socket) {
-        socket.emit('clear_chat', { conversationId });
-      }
-      setMessages([]);
-      fetchConversations();
-    } catch (err) {
-      console.error('Clear chat error:', err);
+  // Clear chat
+  const clearChat = (conversationId) => {
+    if (socket) {
+      socket.emit('clear_chat', { conversationId });
     }
   };
 
@@ -388,16 +248,15 @@ export const SocketProvider = ({ children }) => {
     <SocketContext.Provider
       value={{
         socket,
-        connectionStatus,
-        onlineUserIds,
         conversations,
         activeConversation,
         messages,
-        typingUsers,
-        selectConversation,
-        startConversationWithUser,
-        sendMessage,
         setMessages,
+        onlineUserIds,
+        typingUsers,
+        connectionStatus,
+        selectConversation,
+        sendMessage,
         startTyping,
         stopTyping,
         deleteMessageForMe,

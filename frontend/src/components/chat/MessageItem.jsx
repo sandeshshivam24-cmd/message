@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import { chatApi } from '../../api/client';
-import { Check, CheckCheck, MoreVertical, Reply, Copy, Trash2, FileText, Download, AlertCircle, RefreshCw, Ban, Play, Music } from 'lucide-react';
+import { Check, CheckCheck, MoreVertical, Reply, Copy, Trash2, FileText, Download, AlertCircle, RefreshCw, Music } from 'lucide-react';
 
 const getMediaType = (message) => {
   if (!message) return 'text';
@@ -171,6 +171,10 @@ const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClic
 
   const activeMediaUrl = signedUrl || message.mediaUrl;
 
+  if (isDeleted) {
+    return null;
+  }
+
   return (
     <div
       className={`message-wrapper ${isSentByMe ? 'sent' : 'received'}`}
@@ -203,251 +207,241 @@ const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClic
         </div>
       )}
 
-      <div className="message-bubble" style={{ padding: (!isDeleted && mediaType === 'image') ? '6px' : '10px 14px' }}>
-        {/* DELETED MESSAGE STATE */}
-        {isDeleted ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.88rem' }}>
-            <Ban size={16} style={{ color: 'var(--text-dim)' }} />
-            <span>This message was deleted</span>
+      <div className="message-bubble" style={{ padding: mediaType === 'image' ? '6px' : '10px 14px' }}>
+        {/* Reply Reference Quote */}
+        {message.replyTo && (
+          <div className="reply-quote" style={{ margin: mediaType === 'image' ? '4px 4px 6px' : '0 0 6px' }}>
+            <div className="reply-author">{message.replyTo.senderName || 'Message'}</div>
+            <div className="reply-text">{message.replyTo.text}</div>
           </div>
-        ) : (
-          <>
-            {/* Reply Reference Quote */}
-            {message.replyTo && (
-              <div className="reply-quote" style={{ margin: mediaType === 'image' ? '4px 4px 6px' : '0 0 6px' }}>
-                <div className="reply-author">{message.replyTo.senderName || 'Message'}</div>
-                <div className="reply-text">{message.replyTo.text}</div>
-              </div>
-            )}
+        )}
 
-            {/* 1. IMAGE MEDIA MESSAGE */}
-            {mediaType === 'image' && (
-              <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', minWidth: '200px' }}>
-                {isMediaLoading ? (
-                  <div
-                    style={{
-                      width: '260px',
-                      height: '180px',
-                      background: 'rgba(255,255,255,0.05)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px',
-                      color: 'var(--text-muted)'
-                    }}
-                  >
-                    <RefreshCw size={20} className="spin" />
-                    <span style={{ fontSize: '0.78rem' }}>Loading photo...</span>
-                  </div>
-                ) : mediaLoadError ? (
-                  <div
-                    style={{
-                      width: '240px',
-                      height: '140px',
-                      background: 'rgba(244, 63, 94, 0.1)',
-                      border: '1px solid rgba(244, 63, 94, 0.3)',
-                      borderRadius: '12px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '6px',
-                      color: '#f43f5e',
-                      padding: '12px',
-                      textAlign: 'center'
-                    }}
-                  >
-                    <AlertCircle size={20} />
-                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Unable to load image</span>
-                    <button
-                      onClick={fetchSignedUrl}
-                      style={{ fontSize: '0.75rem', textDecoration: 'underline', color: 'inherit', background: 'none', border: 'none', cursor: 'pointer', marginTop: '4px' }}
-                    >
-                      Retry
-                    </button>
-                  </div>
-                ) : activeMediaUrl ? (
-                  <img
-                    src={activeMediaUrl}
-                    alt={message.fileName || 'Photo'}
-                    onClick={() => onImageClick(activeMediaUrl, message.fileName)}
-                    style={{
-                      width: '100%',
-                      maxWidth: '320px',
-                      maxHeight: '340px',
-                      objectFit: 'cover',
-                      borderRadius: '12px',
-                      cursor: 'pointer',
-                      display: 'block'
-                    }}
-                  />
-                ) : (
-                  <div
-                    style={{
-                      width: '240px',
-                      height: '160px',
-                      background: 'rgba(255,255,255,0.05)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: 'var(--text-muted)'
-                    }}
-                  >
-                    Uploading...
-                  </div>
-                )}
-
-                {/* Upload Progress Overlay */}
-                {message.uploadStatus === 'uploading' && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      background: 'rgba(0,0,0,0.6)',
-                      backdropFilter: 'blur(2px)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px',
-                      color: 'white'
-                    }}
-                  >
-                    <RefreshCw size={24} className="spin" />
-                    <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>
-                      {message.uploadProgress || 0}% Uploading
-                    </span>
-                  </div>
-                )}
-
-                {/* Upload Failed Overlay */}
-                {message.uploadStatus === 'failed' && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      background: 'rgba(244, 63, 94, 0.85)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '6px',
-                      color: 'white'
-                    }}
-                  >
-                    <AlertCircle size={22} />
-                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Upload Failed</span>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 2. VIDEO MEDIA MESSAGE */}
-            {mediaType === 'video' && (
-              <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', maxWidth: '320px' }}>
-                {activeMediaUrl ? (
-                  <video
-                    src={activeMediaUrl}
-                    controls
-                    preload="metadata"
-                    style={{
-                      width: '100%',
-                      maxHeight: '320px',
-                      borderRadius: '12px',
-                      display: 'block',
-                      background: '#000'
-                    }}
-                  />
-                ) : (
-                  <div style={{ width: '260px', height: '160px', background: 'rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <RefreshCw size={20} className="spin" />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 3. AUDIO MEDIA MESSAGE */}
-            {mediaType === 'audio' && (
-              <div style={{ padding: '6px 4px', minWidth: '240px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Music size={20} style={{ color: isSentByMe ? 'white' : 'var(--primary)', flexShrink: 0 }} />
-                {activeMediaUrl ? (
-                  <audio
-                    src={activeMediaUrl}
-                    controls
-                    style={{ width: '100%', height: '36px' }}
-                  />
-                ) : (
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Loading audio...</div>
-                )}
-              </div>
-            )}
-
-            {/* 4. PDF OR GENERIC FILE DOCUMENT MESSAGE */}
-            {(mediaType === 'pdf' || mediaType === 'file') && (
+        {/* 1. IMAGE MEDIA MESSAGE */}
+        {mediaType === 'image' && (
+          <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', minWidth: '200px' }}>
+            {isMediaLoading ? (
               <div
                 style={{
+                  width: '260px',
+                  height: '180px',
+                  background: 'rgba(255,255,255,0.05)',
                   display: 'flex',
+                  flexDirection: 'column',
                   alignItems: 'center',
-                  gap: '12px',
-                  padding: '6px 4px',
-                  minWidth: '220px'
+                  justifyContent: 'center',
+                  gap: '8px',
+                  color: 'var(--text-muted)'
                 }}
               >
-                <div
-                  style={{
-                    width: '42px',
-                    height: '42px',
-                    borderRadius: '10px',
-                    background: 'rgba(255,255,255,0.12)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: isSentByMe ? 'white' : 'var(--primary)'
-                  }}
+                <RefreshCw size={20} className="spin" />
+                <span style={{ fontSize: '0.78rem' }}>Loading photo...</span>
+              </div>
+            ) : mediaLoadError ? (
+              <div
+                style={{
+                  width: '240px',
+                  height: '140px',
+                  background: 'rgba(244, 63, 94, 0.1)',
+                  border: '1px solid rgba(244, 63, 94, 0.3)',
+                  borderRadius: '12px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  color: '#f43f5e',
+                  padding: '12px',
+                  textAlign: 'center'
+                }}
+              >
+                <AlertCircle size={20} />
+                <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Unable to load image</span>
+                <button
+                  onClick={fetchSignedUrl}
+                  style={{ fontSize: '0.75rem', textDecoration: 'underline', color: 'inherit', background: 'none', border: 'none', cursor: 'pointer', marginTop: '4px' }}
                 >
-                  <FileText size={22} />
-                </div>
-
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontWeight: 600,
-                      fontSize: '0.88rem',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis'
-                    }}
-                  >
-                    {message.fileName || 'Document'}
-                  </div>
-                  <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>
-                    {message.uploadStatus === 'uploading'
-                      ? `Uploading ${message.uploadProgress || 0}%`
-                      : formatFileSize(message.fileSize)}
-                  </div>
-                </div>
-
-                {activeMediaUrl && message.uploadStatus !== 'uploading' && (
-                  <button
-                    className="icon-btn"
-                    onClick={handleDownloadFile}
-                    title="Download file"
-                    style={{ color: 'inherit' }}
-                  >
-                    <Download size={18} />
-                  </button>
-                )}
+                  Retry
+                </button>
+              </div>
+            ) : activeMediaUrl ? (
+              <img
+                src={activeMediaUrl}
+                alt={message.fileName || 'Photo'}
+                onClick={() => onImageClick(activeMediaUrl, message.fileName)}
+                style={{
+                  width: '100%',
+                  maxWidth: '320px',
+                  maxHeight: '340px',
+                  objectFit: 'cover',
+                  borderRadius: '12px',
+                  cursor: 'pointer',
+                  display: 'block'
+                }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: '240px',
+                  height: '160px',
+                  background: 'rgba(255,255,255,0.05)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--text-muted)'
+                }}
+              >
+                Uploading...
               </div>
             )}
 
-            {/* TEXT MESSAGE TYPE & OPTIONAL CAPTION */}
-            {message.text && (
-              <div style={{ marginTop: mediaType !== 'text' ? '6px' : '0' }}>
-                {message.text}
+            {/* Upload Progress Overlay */}
+            {message.uploadStatus === 'uploading' && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  background: 'rgba(0,0,0,0.6)',
+                  backdropFilter: 'blur(2px)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  color: 'white'
+                }}
+              >
+                <RefreshCw size={24} className="spin" />
+                <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>
+                  {message.uploadProgress || 0}% Uploading
+                </span>
               </div>
             )}
-          </>
+
+            {/* Upload Failed Overlay */}
+            {message.uploadStatus === 'failed' && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  background: 'rgba(244, 63, 94, 0.85)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  color: 'white'
+                }}
+              >
+                <AlertCircle size={22} />
+                <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Upload Failed</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 2. VIDEO MEDIA MESSAGE */}
+        {mediaType === 'video' && (
+          <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', maxWidth: '320px' }}>
+            {activeMediaUrl ? (
+              <video
+                src={activeMediaUrl}
+                controls
+                preload="metadata"
+                style={{
+                  width: '100%',
+                  maxHeight: '320px',
+                  borderRadius: '12px',
+                  display: 'block',
+                  background: '#000'
+                }}
+              />
+            ) : (
+              <div style={{ width: '260px', height: '160px', background: 'rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <RefreshCw size={20} className="spin" />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 3. AUDIO MEDIA MESSAGE */}
+        {mediaType === 'audio' && (
+          <div style={{ padding: '6px 4px', minWidth: '240px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Music size={20} style={{ color: isSentByMe ? 'white' : 'var(--primary)', flexShrink: 0 }} />
+            {activeMediaUrl ? (
+              <audio
+                src={activeMediaUrl}
+                controls
+                style={{ width: '100%', height: '36px' }}
+              />
+            ) : (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Loading audio...</div>
+            )}
+          </div>
+        )}
+
+        {/* 4. PDF OR GENERIC FILE DOCUMENT MESSAGE */}
+        {(mediaType === 'pdf' || mediaType === 'file') && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              padding: '6px 4px',
+              minWidth: '220px'
+            }}
+          >
+            <div
+              style={{
+                width: '42px',
+                height: '42px',
+                borderRadius: '10px',
+                background: 'rgba(255,255,255,0.12)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: isSentByMe ? 'white' : 'var(--primary)'
+              }}
+            >
+              <FileText size={22} />
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  fontWeight: 600,
+                  fontSize: '0.88rem',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}
+              >
+                {message.fileName || 'Document'}
+              </div>
+              <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>
+                {message.uploadStatus === 'uploading'
+                  ? `Uploading ${message.uploadProgress || 0}%`
+                  : formatFileSize(message.fileSize)}
+              </div>
+            </div>
+
+            {activeMediaUrl && message.uploadStatus !== 'uploading' && (
+              <button
+                className="icon-btn"
+                onClick={handleDownloadFile}
+                title="Download file"
+                style={{ color: 'inherit' }}
+              >
+                <Download size={18} />
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* TEXT MESSAGE TYPE & OPTIONAL CAPTION */}
+        {message.text && (
+          <div style={{ marginTop: mediaType !== 'text' ? '6px' : '0' }}>
+            {message.text}
+          </div>
         )}
 
         {/* Meta (Time & Status Tick) */}
@@ -468,19 +462,17 @@ const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClic
 
           {showMenu && (
             <div className="context-menu-popup" style={{ right: isSentByMe ? 'auto' : 0, left: isSentByMe ? 0 : 'auto' }}>
-              {!isDeleted && (
-                <button
-                  className="context-item"
-                  onClick={() => {
-                    onReply(message);
-                    setShowMenu(false);
-                  }}
-                >
-                  <Reply size={14} /> Reply
-                </button>
-              )}
+              <button
+                className="context-item"
+                onClick={() => {
+                  onReply(message);
+                  setShowMenu(false);
+                }}
+              >
+                <Reply size={14} /> Reply
+              </button>
 
-              {!isDeleted && message.text && (
+              {message.text && (
                 <button
                   className="context-item"
                   onClick={() => {
@@ -514,17 +506,15 @@ const MessageItemComponent = React.memo(({ message, onReply, onCopy, onImageClic
                 <Trash2 size={14} /> Delete for me
               </button>
 
-              {isSentByMe && !isDeleted && (
-                <button
-                  className="context-item danger"
-                  onClick={() => {
-                    deleteMessageForEveryone(message.id);
-                    setShowMenu(false);
-                  }}
-                >
-                  <Trash2 size={14} /> Delete for everyone
-                </button>
-              )}
+              <button
+                className="context-item danger"
+                onClick={() => {
+                  deleteMessageForEveryone(message.id);
+                  setShowMenu(false);
+                }}
+              >
+                <Trash2 size={14} /> Delete for everyone
+              </button>
             </div>
           )}
         </div>

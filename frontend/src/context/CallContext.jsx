@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useSocket } from './SocketContext';
 import { useAuth } from './AuthContext';
-import { playRingTone } from '../utils/audioSynth';
 
 const CallContext = createContext(null);
 
@@ -20,6 +19,10 @@ export const CallProvider = ({ children }) => {
   const [isRemoteVideoOff, setIsRemoteVideoOff] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
+
+  // Camera Facing Mode: 'user' (front) | 'environment' (back/rear)
+  const [facingMode, setFacingMode] = useState('user');
+  const [isSwitchingCamera, setIsSwitchingCamera] = useState(false);
 
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
@@ -69,7 +72,6 @@ export const CallProvider = ({ children }) => {
     pc.ontrack = (event) => {
       if (event.streams && event.streams[0]) {
         remoteStreamRef.current = event.streams[0];
-        // Trigger re-render to attach stream to video elements
         setCallState(prev => prev === 'connecting' ? 'connected' : prev);
       }
     };
@@ -81,7 +83,6 @@ export const CallProvider = ({ children }) => {
         startCallTimer();
       } else if (pc.connectionState === 'disconnected') {
         setCallState('reconnecting');
-        // Attempt ICE restart
         pc.restartIce();
       } else if (pc.connectionState === 'failed') {
         setCallState('failed');
@@ -94,14 +95,15 @@ export const CallProvider = ({ children }) => {
   };
 
   // Acquire Media Tracks
-  const getUserMediaStream = async (requestedType) => {
+  const getUserMediaStream = async (requestedType, preferredFacing = 'user') => {
     try {
       const constraints = {
         audio: true,
-        video: requestedType === 'video'
+        video: requestedType === 'video' ? { facingMode: preferredFacing } : false
       };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       localStreamRef.current = stream;
+      setFacingMode(preferredFacing);
       return stream;
     } catch (err) {
       console.error('Error accessing camera/microphone:', err);
@@ -128,12 +130,11 @@ export const CallProvider = ({ children }) => {
       setIsRemoteVideoOff(false);
       setIsMinimized(false);
 
-      const stream = await getUserMediaStream(type);
+      const stream = await getUserMediaStream(type, 'user');
       const pc = createPeerConnection(recipientUser.id);
 
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      // Emit initiate signal
       if (socket) {
         socket.emit('call:initiate', {
           recipientId: recipientUser.id,
@@ -141,7 +142,6 @@ export const CallProvider = ({ children }) => {
         });
       }
 
-      // 30 second no-answer timeout
       ringtoneTimerRef.current = setTimeout(() => {
         if (callState === 'calling') {
           endCall();
@@ -161,7 +161,7 @@ export const CallProvider = ({ children }) => {
       if (ringtoneTimerRef.current) clearTimeout(ringtoneTimerRef.current);
       setCallState('connecting');
 
-      const stream = await getUserMediaStream(callType);
+      const stream = await getUserMediaStream(callType, 'user');
       const pc = createPeerConnection(peerDetails.id);
 
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
@@ -213,6 +213,8 @@ export const CallProvider = ({ children }) => {
     setIsVideoOff(false);
     setIsRemoteMuted(false);
     setIsRemoteVideoOff(false);
+    setFacingMode('user');
+    setIsSwitchingCamera(false);
   };
 
   const startCallTimer = () => {
@@ -242,7 +244,7 @@ export const CallProvider = ({ children }) => {
     }
   };
 
-  // Toggle Camera Video
+  // Toggle Camera Video On/Off
   const toggleVideo = () => {
     if (callType === 'audio') return;
     if (localStreamRef.current) {
@@ -262,11 +264,92 @@ export const CallProvider = ({ children }) => {
     }
   };
 
+  // Switch Camera Front <-> Rear using RTCRtpSender.replaceTrack()
+  const switchCamera = async () => {
+    if (callType !== 'video' || isSwitchingCamera) return;
+    const targetFacingMode = facingMode === 'user' ? 'environment' : 'user';
+
+    setIsSwitchingCamera(true);
+
+    try {
+      let newStream = null;
+
+      // 1. Try exact constraint
+      try {
+        newStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: targetFacingMode } },
+          audio: false
+        });
+      } catch (err1) {
+        // 2. Fallback to ideal constraint
+        try {
+          newStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: targetFacingMode },
+            audio: false
+          });
+        } catch (err2) {
+          // 3. Fallback to device enumeration
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+          if (videoDevices.length > 1) {
+            const currentTrack = localStreamRef.current?.getVideoTracks()[0];
+            const currentLabel = currentTrack ? currentTrack.label : '';
+            const otherDevice = videoDevices.find(d => !d.label || d.label !== currentLabel) || videoDevices[1];
+
+            newStream = await navigator.mediaDevices.getUserMedia({
+              video: { deviceId: { exact: otherDevice.deviceId } },
+              audio: false
+            });
+          } else {
+            throw new Error('No secondary camera detected on this device');
+          }
+        }
+      }
+
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      if (!newVideoTrack) throw new Error('Could not acquire new camera track');
+
+      // Preserve current mute state on new track
+      newVideoTrack.enabled = !isVideoOff;
+
+      const oldStream = localStreamRef.current;
+      const oldVideoTrack = oldStream?.getVideoTracks()[0];
+      const audioTrack = oldStream?.getAudioTracks()[0];
+
+      // Replace WebRTC sender track without disconnecting call
+      if (pcRef.current) {
+        const videoSender = pcRef.current.getSenders().find(s => s.track && s.track.kind === 'video');
+        if (videoSender) {
+          await videoSender.replaceTrack(newVideoTrack);
+        }
+      }
+
+      // Stop old camera track
+      if (oldVideoTrack) {
+        oldVideoTrack.stop();
+      }
+
+      // Re-assemble local MediaStream
+      const updatedStream = new MediaStream();
+      if (audioTrack) updatedStream.addTrack(audioTrack);
+      updatedStream.addTrack(newVideoTrack);
+      localStreamRef.current = updatedStream;
+
+      setFacingMode(targetFacingMode);
+
+    } catch (err) {
+      console.warn('Camera switch notice:', err.message);
+      alert('Camera switch not available or secondary camera not found on this device.');
+    } finally {
+      setIsSwitchingCamera(false);
+    }
+  };
+
   // Handle Socket Signaling Listeners
   useEffect(() => {
     if (!socket) return;
 
-    // Incoming call request
     socket.on('call:incoming', ({ callerId, callerName, callerAvatar, callType: reqType }) => {
       if (callState !== 'idle') {
         socket.emit('call:busy', { callerId });
@@ -278,7 +361,6 @@ export const CallProvider = ({ children }) => {
       setCallState('incoming');
     });
 
-    // Caller receives acceptance from recipient
     socket.on('call:accepted', async () => {
       if (callState === 'calling' && pcRef.current && peerDetails) {
         setCallState('connecting');
@@ -292,7 +374,6 @@ export const CallProvider = ({ children }) => {
       }
     });
 
-    // Recipient receives offer from caller
     socket.on('call:offer', async ({ callerId, offer }) => {
       if (pcRef.current) {
         try {
@@ -306,7 +387,6 @@ export const CallProvider = ({ children }) => {
       }
     });
 
-    // Caller receives answer from recipient
     socket.on('call:answer', async ({ answer }) => {
       if (pcRef.current) {
         try {
@@ -317,7 +397,6 @@ export const CallProvider = ({ children }) => {
       }
     });
 
-    // Receive ICE candidates
     socket.on('call:ice-candidate', async ({ candidate }) => {
       if (pcRef.current && candidate) {
         try {
@@ -328,18 +407,15 @@ export const CallProvider = ({ children }) => {
       }
     });
 
-    // Call Rejected or Busy
     socket.on('call:rejected', ({ reason }) => {
       setCallState('failed');
       setTimeout(cleanupCall, 2000);
     });
 
-    // Call Ended
     socket.on('call:ended', () => {
       cleanupCall();
     });
 
-    // Remote Mute/Video updates
     socket.on('call:remote-mute', ({ isMuted: remoteMuted }) => {
       setIsRemoteMuted(remoteMuted);
     });
@@ -373,6 +449,8 @@ export const CallProvider = ({ children }) => {
         isRemoteVideoOff,
         isMinimized,
         callDuration,
+        facingMode,
+        isSwitchingCamera,
         localStreamRef,
         remoteStreamRef,
         startCall,
@@ -381,6 +459,7 @@ export const CallProvider = ({ children }) => {
         endCall,
         toggleMute,
         toggleVideo,
+        switchCamera,
         setIsMinimized
       }}
     >

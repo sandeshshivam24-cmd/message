@@ -136,22 +136,13 @@ export class PostgresMessageRepository extends MessageRepository {
     return this._mapMessage(res.rows[0]);
   }
 
-  async deleteForEveryone(messageId, senderId) {
+  async deleteForEveryone(messageId) {
     const sql = `
-      UPDATE messages
-      SET is_deleted_for_everyone = true,
-          text = 'This message was deleted',
-          type = 'text',
-          media_url = NULL,
-          file_name = NULL,
-          file_size = NULL,
-          file_type = NULL,
-          reply_to = NULL,
-          updated_at = NOW()
-      WHERE id = $1 AND sender_id = $2
+      DELETE FROM messages
+      WHERE id = $1
       RETURNING *
     `;
-    const res = await query(sql, [messageId, senderId]);
+    const res = await query(sql, [messageId]);
     if (res.rows.length === 0) {
       return null;
     }

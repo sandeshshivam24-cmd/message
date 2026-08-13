@@ -5,11 +5,17 @@ const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem('messenger_token') || null);
+  // Store authentication token in sessionStorage so that closing the tab/browser requires re-login
+  const [token, setToken] = useState(sessionStorage.getItem('messenger_token') || null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const initAuth = async () => {
+      // Clear legacy persistent localStorage tokens if present
+      if (localStorage.getItem('messenger_token')) {
+        localStorage.removeItem('messenger_token');
+      }
+
       if (token) {
         try {
           const res = await authApi.getMe();
@@ -27,7 +33,7 @@ export const AuthProvider = ({ children }) => {
   const login = async (username, password) => {
     const res = await authApi.login({ username, password });
     const { token: newToken, user: userData } = res.data;
-    localStorage.setItem('messenger_token', newToken);
+    sessionStorage.setItem('messenger_token', newToken);
     setToken(newToken);
     setUser(userData);
     return userData;
@@ -36,13 +42,14 @@ export const AuthProvider = ({ children }) => {
   const register = async (data) => {
     const res = await authApi.register(data);
     const { token: newToken, user: userData } = res.data;
-    localStorage.setItem('messenger_token', newToken);
+    sessionStorage.setItem('messenger_token', newToken);
     setToken(newToken);
     setUser(userData);
     return userData;
   };
 
   const logout = () => {
+    sessionStorage.removeItem('messenger_token');
     localStorage.removeItem('messenger_token');
     setToken(null);
     setUser(null);

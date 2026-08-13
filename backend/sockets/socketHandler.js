@@ -1,84 +1,59 @@
-import { userRepository, conversationRepository, blockRepository } from '../repositories/index.js';
+import {
+  userRepository,
+  conversationRepository,
+  blockRepository
+} from '../repositories/index.js';
 import { ChatService } from '../services/ChatService.js';
+import { getSupabaseClient } from '../config/storage.js';
 
-// Global map tracking active userId -> Set of socketIds
-const onlineUsersMap = new Map();
+// Global maps to track online socket connections and typing statuses
+const onlineUsersMap = new Map(); // Key: userId, Value: Set of socket.ids
+const userSocketsMap = new Map(); // Key: socket.id, Value: userId
+const typingMap = new Map();       // Key: conversationId, Value: userId
 
 export const setupSocketHandlers = (io) => {
   io.on('connection', async (socket) => {
-    // Authenticated sender ID strictly derived from verified JWT token
     const userId = socket.user.id;
-    
-    // Add socket to online users tracking
+    userSocketsMap.set(socket.id, userId);
+
+    // Track multi-device / multi-tab socket connections per user
     if (!onlineUsersMap.has(userId)) {
       onlineUsersMap.set(userId, new Set());
     }
     onlineUsersMap.get(userId).add(socket.id);
 
-    // Join personal user room
+    // Update database status to online on first active connection
+    if (onlineUsersMap.get(userId).size === 1) {
+      await userRepository.updateOnlineStatus(userId, true);
+      io.emit('user_presence_change', {
+        userId,
+        isOnline: true,
+        lastSeen: new Date().toISOString()
+      });
+    }
+
+    // Join personal user room for direct signaling (e.g. WebRTC calls)
     socket.join(`user:${userId}`);
 
-    // Update user online status asynchronously in repository
-    userRepository.update(userId, { isOnline: true }).catch(err => {
-      console.error('Failed to update online status:', err.message);
+    // Automatically join all active conversation rooms for this user
+    try {
+      const userConversations = await conversationRepository.findByUserId(userId);
+      userConversations.forEach(conv => {
+        socket.join(`conversation:${conv.id}`);
+      });
+    } catch (err) {
+      console.error('Error joining user conversation rooms:', err.message);
+    }
+
+    // Send initial presence state to newly connected client
+    socket.emit('initial_presence_state', {
+      onlineUserIds: Array.from(onlineUsersMap.keys())
     });
 
-    // Automatically transition pending 'sent' messages to 'delivered' when user comes online
-    (async () => {
-      try {
-        const userConvs = await conversationRepository.findByUserId(userId);
-        for (const conv of userConvs) {
-          const updatedDelivered = await ChatService.markMessagesAsDelivered(conv.id, userId);
-          if (updatedDelivered && updatedDelivered.length > 0) {
-            io.to(`conversation:${conv.id}`).emit('messages_status_changed', {
-              conversationId: conv.id,
-              status: 'delivered',
-              messageIds: updatedDelivered.map(m => m.id),
-              updatedBy: userId
-            });
-          }
-        }
-      } catch (err) {
-        console.error('Error updating delivered status on connect:', err.message);
-      }
-    })();
-
-    // Broadcast presence update (ONLINE) to all connected clients
-    io.emit('user_presence_change', {
-      userId,
-      isOnline: true,
-      lastSeen: null
-    });
-
-    // Send initial list of all online user IDs to the newly connected user
-    const onlineUserIds = Array.from(onlineUsersMap.keys());
-    socket.emit('initial_presence_state', { onlineUserIds });
-
-    // --- CONVERSATION ROOMS ---
-    socket.on('join_conversation', async ({ conversationId }) => {
-      if (!conversationId) return;
-
-      try {
-        // Authorization check: Verify user is a participant of conversation
-        const conv = await conversationRepository.findById(conversationId);
-        if (!conv || !conv.participants.includes(userId)) {
-          return socket.emit('error_notification', { message: 'Unauthorized: Access to conversation denied' });
-        }
-
+    // --- CONVERSATION ROOM MANAGEMENT ---
+    socket.on('join_conversation', ({ conversationId }) => {
+      if (conversationId) {
         socket.join(`conversation:${conversationId}`);
-
-        // Mark messages sent to this user in this conversation as SEEN
-        const updatedSeen = await ChatService.markMessagesAsSeen(conversationId, userId);
-        if (updatedSeen.length > 0) {
-          io.to(`conversation:${conversationId}`).emit('messages_status_changed', {
-            conversationId,
-            status: 'seen',
-            messageIds: updatedSeen.map(m => m.id),
-            updatedBy: userId
-          });
-        }
-      } catch (err) {
-        console.error('Error joining conversation room:', err.message);
       }
     });
 
@@ -88,55 +63,32 @@ export const setupSocketHandlers = (io) => {
       }
     });
 
-    // --- SEND MESSAGE ---
-    socket.on('send_message', async (data, callback) => {
+    // --- REAL-TIME MESSAGING ---
+    socket.on('send_message', async (data) => {
       try {
-        const { conversationId, recipientId, text, type = 'text', mediaUrl, fileName, fileSize, fileType, replyTo, tempId } = data;
+        const { conversationId, recipientId, text, type, mediaUrl, fileName, fileSize, fileType, replyTo, tempId } = data;
 
-        // Input validation
-        if (text && text.length > 5000) {
-          if (callback) callback({ error: 'Message exceeds maximum length of 5000 characters' });
-          return;
-        }
-
-        if (!['text', 'image', 'file'].includes(type)) {
-          if (callback) callback({ error: 'Invalid message type' });
-          return;
-        }
-
+        // Resolve or verify conversation
         let targetConvId = conversationId;
-        // If conversation ID is not provided, find or create it
         if (!targetConvId && recipientId) {
-          // Check block policy
-          const blocked = await blockRepository.isBlocked(userId, recipientId);
-          if (blocked) {
-            if (callback) callback({ error: 'Messaging unavailable due to user block settings' });
-            return;
-          }
-
           const conv = await ChatService.getOrCreateConversation(userId, recipientId);
           targetConvId = conv.id;
+          socket.join(`conversation:${targetConvId}`);
         }
 
-        if (!targetConvId) {
-          if (callback) callback({ error: 'Conversation ID or recipient required' });
-          return;
+        const conv = await conversationRepository.findById(targetConvId);
+        if (!conv || !conv.participants.includes(userId)) {
+          return socket.emit('error', { message: 'Access denied to conversation' });
         }
 
-        // Authorization check: Verify sender is in conversation
-        const conversationRecord = await conversationRepository.findById(targetConvId);
-        if (!conversationRecord || !conversationRecord.participants.includes(userId)) {
-          if (callback) callback({ error: 'Unauthorized: Not a participant of this conversation' });
-          return;
-        }
+        const otherUserId = conv.participants.find(id => id !== userId);
 
-        const otherUserId = conversationRecord.participants.find(p => p !== userId);
+        // ENFORCE PRIVACY: Check block status before delivering message
+        const isBlockedByRecipient = await blockRepository.isBlocked(otherUserId, userId);
+        const isBlockedBySender = await blockRepository.isBlocked(userId, otherUserId);
 
-        // Check block policy
-        const isUserBlocked = await blockRepository.isBlocked(userId, otherUserId);
-        if (isUserBlocked) {
-          if (callback) callback({ error: 'Messaging unavailable due to user block settings' });
-          return;
+        if (isBlockedByRecipient || isBlockedBySender) {
+          return socket.emit('error', { message: 'Cannot send message. Communication blocked.' });
         }
 
         // Save message via ChatService using verified authenticated senderId (userId)
@@ -181,53 +133,50 @@ export const setupSocketHandlers = (io) => {
           message.status = 'delivered';
         }
 
-        // Attach tempId for frontend deduplication
-        const payload = {
+        // Emit message to all sockets in conversation room (both sender & recipient)
+        io.to(`conversation:${targetConvId}`).emit('receive_message', {
           message,
-          conversationId: targetConvId,
-          tempId
-        };
-
-        // Broadcast to conversation room and user rooms
-        io.to(`conversation:${targetConvId}`).emit('receive_message', payload);
-        io.to(`user:${otherUserId}`).emit('receive_message', payload);
-        io.to(`user:${userId}`).emit('receive_message', payload);
-
-        // Emit notification of updated conversation list
-        io.to(`user:${userId}`).to(`user:${otherUserId}`).emit('conversation_updated', {
-          conversationId: targetConvId,
-          lastMessage: message
+          conversationId: targetConvId
         });
 
-        if (callback) callback({ success: true, message });
+        // Ensure recipient sockets join room if they haven't already
+        const recipientSockets = onlineUsersMap.get(otherUserId);
+        if (recipientSockets) {
+          recipientSockets.forEach(sId => {
+            const recipientSocket = io.sockets.sockets.get(sId);
+            if (recipientSocket) {
+              recipientSocket.join(`conversation:${targetConvId}`);
+            }
+          });
+        }
       } catch (err) {
-        console.error('Socket send_message error:', err);
-        if (callback) callback({ error: err.message });
+        console.error('Socket send_message error:', err.message);
+        socket.emit('error', { message: err.message });
       }
     });
 
-    // --- MARK CONVERSATION SEEN ---
+    // --- READ / SEEN / DELIVERED STATUS UPDATES ---
     socket.on('mark_seen', async ({ conversationId }) => {
       try {
         const conv = await conversationRepository.findById(conversationId);
         if (!conv || !conv.participants.includes(userId)) return;
 
-        const updatedSeen = await ChatService.markMessagesAsSeen(conversationId, userId);
-        if (updatedSeen.length > 0) {
+        const updatedMessages = await ChatService.markMessagesAsSeen(conversationId, userId);
+        if (updatedMessages.length > 0) {
           io.to(`conversation:${conversationId}`).emit('messages_status_changed', {
             conversationId,
             status: 'seen',
-            messageIds: updatedSeen.map(m => m.id),
-            updatedBy: userId
+            messageIds: updatedMessages.map(m => m.id)
           });
         }
       } catch (err) {
-        console.error('Error marking seen:', err);
+        console.error('Mark seen error:', err.message);
       }
     });
 
     // --- TYPING INDICATORS ---
     socket.on('typing_start', ({ conversationId }) => {
+      typingMap.set(conversationId, userId);
       socket.to(`conversation:${conversationId}`).emit('user_typing', {
         conversationId,
         userId,
@@ -236,6 +185,9 @@ export const setupSocketHandlers = (io) => {
     });
 
     socket.on('typing_stop', ({ conversationId }) => {
+      if (typingMap.get(conversationId) === userId) {
+        typingMap.delete(conversationId);
+      }
       socket.to(`conversation:${conversationId}`).emit('user_typing', {
         conversationId,
         userId,
@@ -256,12 +208,11 @@ export const setupSocketHandlers = (io) => {
     // --- DELETE FOR EVERYONE ---
     socket.on('delete_message_for_everyone', async ({ messageId, conversationId }) => {
       try {
-        const deletedMsg = await ChatService.deleteMessageForEveryone(messageId, userId);
-        if (deletedMsg) {
+        const deletedResult = await ChatService.deleteMessageForEveryone(messageId, userId);
+        if (deletedResult) {
           io.to(`conversation:${conversationId}`).emit('message_deleted_for_everyone', {
             messageId,
-            conversationId,
-            message: deletedMsg
+            conversationId
           });
         }
       } catch (err) {
@@ -290,79 +241,48 @@ export const setupSocketHandlers = (io) => {
         callerId: userId,
         callerName: socket.user.displayName || socket.user.username,
         callerAvatar: socket.user.avatarUrl,
-        callType // 'audio' | 'video'
+        callType
       });
     });
 
-    socket.on('call:offer', ({ recipientId, offer }) => {
-      io.to(`user:${recipientId}`).emit('call:offer', {
-        callerId: userId,
-        offer
-      });
-    });
-
-    socket.on('call:answer', ({ callerId, answer }) => {
-      io.to(`user:${callerId}`).emit('call:answer', {
-        answer
-      });
-    });
-
-    socket.on('call:ice-candidate', ({ recipientId, candidate }) => {
-      io.to(`user:${recipientId}`).emit('call:ice-candidate', {
-        candidate
-      });
-    });
-
-    socket.on('call:accept', ({ callerId }) => {
+    socket.on('call:accept', ({ callerId, signalData }) => {
       io.to(`user:${callerId}`).emit('call:accepted', {
-        recipientId: userId
+        signalData,
+        responderId: userId
       });
     });
 
     socket.on('call:reject', ({ callerId, reason }) => {
       io.to(`user:${callerId}`).emit('call:rejected', {
-        reason: reason || 'declined'
+        reason: reason || 'declined',
+        responderId: userId
       });
     });
 
-    socket.on('call:busy', ({ callerId }) => {
-      io.to(`user:${callerId}`).emit('call:rejected', {
-        reason: 'busy'
+    socket.on('call:signal', ({ targetId, signalData }) => {
+      io.to(`user:${targetId}`).emit('call:signal', {
+        signalData,
+        senderId: userId
       });
     });
 
-    socket.on('call:end', ({ recipientId }) => {
-      io.to(`user:${recipientId}`).emit('call:ended', {
-        endedBy: userId
-      });
+    socket.on('call:end', ({ targetId }) => {
+      if (targetId) {
+        io.to(`user:${targetId}`).emit('call:ended', { endedBy: userId });
+      }
     });
 
-    socket.on('call:mute-toggle', ({ recipientId, isMuted }) => {
-      io.to(`user:${recipientId}`).emit('call:remote-mute', {
-        isMuted
-      });
-    });
-
-    socket.on('call:video-toggle', ({ recipientId, isVideoOff }) => {
-      io.to(`user:${recipientId}`).emit('call:remote-video', {
-        isVideoOff
-      });
-    });
-
-    // --- DISCONNECT ---
+    // --- DISCONNECT HANDLER ---
     socket.on('disconnect', async () => {
+      userSocketsMap.delete(socket.id);
+
       const userSockets = onlineUsersMap.get(userId);
       if (userSockets) {
         userSockets.delete(socket.id);
         if (userSockets.size === 0) {
           onlineUsersMap.delete(userId);
           const lastSeen = new Date().toISOString();
-          userRepository.update(userId, {
-            isOnline: false,
-            lastSeen
-          }).catch(e => {});
-
-          // Broadcast offline status to all
+          await userRepository.updateOnlineStatus(userId, false, lastSeen);
           io.emit('user_presence_change', {
             userId,
             isOnline: false,

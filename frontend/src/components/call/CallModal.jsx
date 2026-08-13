@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { useCall } from '../../context/CallContext';
 import { Avatar } from '../common/Avatar';
-import { Mic, MicOff, Video, VideoOff, PhoneOff, Phone, Minimize2, RefreshCw } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, PhoneOff, Phone, Minimize2, RefreshCw, SwitchCamera } from 'lucide-react';
 
 export const CallModal = () => {
   const {
@@ -14,6 +14,8 @@ export const CallModal = () => {
     isRemoteVideoOff,
     isMinimized,
     callDuration,
+    facingMode,
+    isSwitchingCamera,
     localStreamRef,
     remoteStreamRef,
     acceptCall,
@@ -21,6 +23,7 @@ export const CallModal = () => {
     endCall,
     toggleMute,
     toggleVideo,
+    switchCamera,
     setIsMinimized
   } = useCall();
 
@@ -32,7 +35,7 @@ export const CallModal = () => {
     if (localVideoRef.current && localStreamRef.current) {
       localVideoRef.current.srcObject = localStreamRef.current;
     }
-  }, [callState, localStreamRef.current, isVideoOff, isMinimized]);
+  }, [callState, localStreamRef.current, isVideoOff, isMinimized, facingMode]);
 
   // Attach remote media stream to video element
   useEffect(() => {
@@ -191,7 +194,7 @@ export const CallModal = () => {
                     width: '100%',
                     height: '100%',
                     objectFit: 'cover',
-                    transform: 'scaleX(-1)',
+                    transform: facingMode === 'user' ? 'scaleX(-1)' : 'none',
                     display: isVideoOff ? 'none' : 'block'
                   }}
                 />
@@ -237,7 +240,7 @@ export const CallModal = () => {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: '24px',
+            gap: '20px',
             background: 'linear-gradient(to top, rgba(0,0,0,0.9), transparent)',
             zIndex: 30
           }}
@@ -300,22 +303,43 @@ export const CallModal = () => {
               </button>
 
               {callType === 'video' && (
-                <button
-                  onClick={toggleVideo}
-                  style={{
-                    width: '52px',
-                    height: '52px',
-                    borderRadius: '50%',
-                    background: isVideoOff ? '#f43f5e' : 'rgba(255, 255, 255, 0.15)',
-                    color: 'white',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}
-                  title={isVideoOff ? 'Turn Camera On' : 'Turn Camera Off'}
-                >
-                  {isVideoOff ? <VideoOff size={22} /> : <Video size={22} />}
-                </button>
+                <>
+                  <button
+                    onClick={toggleVideo}
+                    style={{
+                      width: '52px',
+                      height: '52px',
+                      borderRadius: '50%',
+                      background: isVideoOff ? '#f43f5e' : 'rgba(255, 255, 255, 0.15)',
+                      color: 'white',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                    title={isVideoOff ? 'Turn Camera On' : 'Turn Camera Off'}
+                  >
+                    {isVideoOff ? <VideoOff size={22} /> : <Video size={22} />}
+                  </button>
+
+                  <button
+                    onClick={switchCamera}
+                    disabled={isSwitchingCamera}
+                    style={{
+                      width: '52px',
+                      height: '52px',
+                      borderRadius: '50%',
+                      background: 'rgba(255, 255, 255, 0.15)',
+                      color: 'white',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      opacity: isSwitchingCamera ? 0.5 : 1
+                    }}
+                    title={`Switch Camera (${facingMode === 'user' ? 'Front' : 'Back'})`}
+                  >
+                    <SwitchCamera size={22} className={isSwitchingCamera ? 'spin' : ''} />
+                  </button>
+                </>
               )}
 
               <button
