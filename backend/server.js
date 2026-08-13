@@ -42,17 +42,28 @@ const allowedOrigins = [
 ];
 
 const checkOrigin = (origin, callback) => {
-  if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+  if (!origin) {
+    return callback(null, true);
+  }
+
+  const isAllowed = allowedOrigins.includes(origin) || origin.endsWith('.vercel.app');
+  if (isAllowed) {
     callback(null, true);
   } else {
-    callback(new Error(`Blocked by CORS policy: ${origin}`));
+    // Return callback(null, false) per cors middleware specification instead of throwing an Error
+    callback(null, false);
   }
 };
 
-app.use(cors({
+const corsOptions = {
   origin: checkOrigin,
-  credentials: true
-}));
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -78,21 +89,24 @@ app.get('/api/health', (req, res) => {
     architecture: process.env.DATABASE_URL ? 'Repository Pattern (Supabase PostgreSQL Active)' : 'Repository Pattern (In-Memory Active)',
     databaseConnected: Boolean(process.env.DATABASE_URL),
     storageProvider: 'Supabase Storage Bucket',
-    version: '3.4.0'
+    timestamp: new Date().toISOString()
   });
 });
 
-// Centralized Error Handling Middleware
+// Global Express Error Handler ensuring CORS headers are preserved on error responses
 app.use((err, req, res, next) => {
-  console.error('[SERVER ERROR]:', err.message);
+  const origin = req.headers.origin;
+  if (origin && (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app'))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+  console.error('Express Unhandled Error:', err.message);
   res.status(err.status || 500).json({
-    message: process.env.NODE_ENV === 'production' 
-      ? 'An unexpected error occurred. Please try again later.' 
-      : err.message
+    message: err.message || 'Internal Server Error'
   });
 });
 
-// Create HTTP & Socket.IO Server
+// HTTP Server & Socket.IO Initialization
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -100,21 +114,21 @@ const io = new Server(server, {
     origin: checkOrigin,
     methods: ['GET', 'POST'],
     credentials: true
-  }
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
-// Socket Authentication Middleware
+// Attach Socket.IO authentication & connection handlers
 io.use(socketAuthMiddleware);
-
-// Initialize Socket Event Handlers
 setupSocketHandlers(io);
 
-// Start Server after Database Initialization
 const startServer = async () => {
   try {
     if (process.env.DATABASE_URL) {
       await initializeDatabase();
     }
+
     await initializeStorageBucket();
 
     // Start 15-minute periodic server cleanup for 24-hour expired messages

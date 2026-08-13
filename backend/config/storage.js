@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import path from 'path';
 
 const supabaseUrl = process.env.SUPABASE_URL || 'https://zhvzwjrwhypdfeobsohp.supabase.co';
-const supabaseKey = process.env.SUPABASE_KEY || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
 const BUCKET_NAME = process.env.SUPABASE_BUCKET || 'messenger-uploads';
 
 let supabase = null;
@@ -26,7 +26,7 @@ export const initializeStorageBucket = async () => {
         console.log(`🔒 Created PRIVATE Supabase Storage bucket: '${BUCKET_NAME}'`);
       } else {
         // Ensure bucket settings are private
-        await supabase.storage.updateBucket(BUCKET_NAME, { public: false }).catch(() => {});
+        await supabase.storage.updateBucket(BUCKET_NAME, { public: false }).catch(() => { });
         console.log(`🔒 PRIVATE Supabase Storage bucket verified: '${BUCKET_NAME}'`);
       }
     }
@@ -61,7 +61,7 @@ export const generateSignedUrl = async (storagePath, expiresIn = 3600) => {
       if (parts.length > 1) {
         cleanPath = parts[1];
       }
-    } catch (e) {}
+    } catch (e) { }
   }
 
   cleanPath = cleanPath.split('?')[0].replace(/^\/+/, '');
@@ -87,6 +87,11 @@ export const generateSignedUrl = async (storagePath, expiresIn = 3600) => {
   }
 
   // Graceful fallback for local static files or un-migrated media paths
+  // Only fall back to raw path for local static files, never for private Supabase URLs
+  if (storagePath.includes('/storage/v1/object/private/')) {
+    console.error('createSignedUrl failed for private object, refusing to return raw URL:', storagePath);
+    return { signedUrl: null, expiresAt: null };
+  }
   return {
     signedUrl: storagePath,
     expiresAt: null
@@ -149,7 +154,7 @@ export const removeFromSupabaseStorage = async (storagePath) => {
       cleanPath = cleanPath.split(`${BUCKET_NAME}/`)[1];
     }
     cleanPath = cleanPath.split('?')[0].replace(/^\/+/, '');
-    
+
     await supabase.storage.from(BUCKET_NAME).remove([cleanPath]);
     return true;
   } catch (err) {
