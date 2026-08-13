@@ -79,6 +79,10 @@ export class PostgresUserRepository extends UserRepository {
     return this._mapUser(res.rows[0]);
   }
 
+  async updateOnlineStatus(id, isOnline, lastSeen = new Date().toISOString()) {
+    return await this.update(id, { isOnline, lastSeen });
+  }
+
   async searchUsers(searchQuery, currentUserId) {
     const q = `%${searchQuery.toLowerCase().trim()}%`;
     const sql = `

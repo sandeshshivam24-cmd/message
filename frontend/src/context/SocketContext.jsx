@@ -95,6 +95,7 @@ export const SocketProvider = ({ children }) => {
           newSocket.emit('mark_seen', { conversationId: msgConvId });
         }
       }
+      // Always refresh conversations list so unread count badge & last_message update in real time
       fetchConversations();
     });
 
@@ -180,6 +181,12 @@ export const SocketProvider = ({ children }) => {
 
   // Select active conversation and load messages
   const selectConversation = async (conv) => {
+    const prevConv = activeConversation;
+
+    if (socket && prevConv && prevConv.id !== conv?.id) {
+      socket.emit('leave_conversation', { conversationId: prevConv.id });
+    }
+
     setActiveConversation(conv);
     if (!conv) {
       setMessages([]);
@@ -194,6 +201,9 @@ export const SocketProvider = ({ children }) => {
         socket.emit('join_conversation', { conversationId: conv.id });
         socket.emit('mark_seen', { conversationId: conv.id });
       }
+
+      // Immediately refresh conversations list so unread badge clears
+      fetchConversations();
     } catch (err) {
       console.error('Failed to fetch messages:', err);
     }

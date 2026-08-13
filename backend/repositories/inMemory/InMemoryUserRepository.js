@@ -52,6 +52,10 @@ export class InMemoryUserRepository extends UserRepository {
     return { ...updatedUser };
   }
 
+  async updateOnlineStatus(id, isOnline, lastSeen = new Date().toISOString()) {
+    return await this.update(id, { isOnline, lastSeen });
+  }
+
   async searchUsers(query, currentUserId) {
     const q = query.toLowerCase().trim();
     const results = [];

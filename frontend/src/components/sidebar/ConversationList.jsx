@@ -40,6 +40,7 @@ export const ConversationList = ({ filterQuery = '' }) => {
         const typingUserId = typingUsers[conv.id];
         const isTyping = typingUserId && typingUserId === recipient?.id;
         const lastMsg = conv.lastMessage;
+        const hasUnread = conv.unreadCount > 0 && !isActive;
 
         return (
           <div
@@ -56,21 +57,38 @@ export const ConversationList = ({ filterQuery = '' }) => {
 
             <div className="conversation-details">
               <div className="conv-top-row">
-                <span className="conv-name">{recipient?.displayName || recipient?.username}</span>
-                {lastMsg && <span className="conv-time">{formatTime(lastMsg.createdAt)}</span>}
+                <span className={`conv-name ${hasUnread ? 'unread-name' : ''}`} style={{ fontWeight: hasUnread ? 700 : 600 }}>
+                  {recipient?.displayName || recipient?.username}
+                </span>
+                {lastMsg && (
+                  <span className="conv-time" style={{ color: hasUnread ? '#10b981' : 'var(--text-dim)', fontWeight: hasUnread ? 700 : 400 }}>
+                    {formatTime(lastMsg.createdAt)}
+                  </span>
+                )}
               </div>
 
               <div className="conv-bottom-row">
                 {isTyping ? (
                   <span className="conv-last-msg typing-text">typing...</span>
                 ) : (
-                  <span className="conv-last-msg">
+                  <span className="conv-last-msg" style={{ color: hasUnread ? 'white' : 'var(--text-muted)', fontWeight: hasUnread ? 600 : 400 }}>
                     {lastMsg ? lastMsg.text : 'No messages yet'}
                   </span>
                 )}
 
-                {conv.unreadCount > 0 && (
-                  <span className="unread-badge">{conv.unreadCount}</span>
+                {hasUnread && (
+                  <span
+                    className="unread-badge"
+                    style={{
+                      background: '#10b981',
+                      color: 'white',
+                      fontWeight: 700,
+                      boxShadow: '0 2px 8px rgba(16, 185, 129, 0.4)'
+                    }}
+                    title={`${conv.unreadCount} unread message(s)`}
+                  >
+                    {conv.unreadCount}
+                  </span>
                 )}
               </div>
             </div>

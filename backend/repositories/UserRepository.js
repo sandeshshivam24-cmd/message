@@ -20,6 +20,10 @@ export class UserRepository {
     throw new Error('Method update() must be implemented');
   }
 
+  async updateOnlineStatus(id, isOnline, lastSeen) {
+    throw new Error('Method updateOnlineStatus() must be implemented');
+  }
+
   async searchUsers(query, currentUserId) {
     throw new Error('Method searchUsers() must be implemented');
   }

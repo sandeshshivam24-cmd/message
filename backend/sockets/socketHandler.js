@@ -32,18 +32,8 @@ export const setupSocketHandlers = (io) => {
       });
     }
 
-    // Join personal user room for direct signaling (e.g. WebRTC calls)
+    // Join personal user room for direct signaling & notifications
     socket.join(`user:${userId}`);
-
-    // Automatically join all active conversation rooms for this user
-    try {
-      const userConversations = await conversationRepository.findByUserId(userId);
-      userConversations.forEach(conv => {
-        socket.join(`conversation:${conv.id}`);
-      });
-    } catch (err) {
-      console.error('Error joining user conversation rooms:', err.message);
-    }
 
     // Send initial presence state to newly connected client
     socket.emit('initial_presence_state', {
@@ -111,21 +101,21 @@ export const setupSocketHandlers = (io) => {
         // Determine recipient online/viewing status
         const isRecipientOnline = onlineUsersMap.has(otherUserId) && onlineUsersMap.get(otherUserId).size > 0;
 
-        // Check if recipient is actively in the conversation room
+        // Check if recipient is ACTIVELY in the conversation room (currently viewing this chat)
         const roomSockets = io.sockets.adapter.rooms.get(`conversation:${targetConvId}`);
-        let isRecipientInRoom = false;
+        let isRecipientViewing = false;
         if (roomSockets && isRecipientOnline) {
           const recipientSockets = onlineUsersMap.get(otherUserId);
           for (const sId of recipientSockets) {
             if (roomSockets.has(sId)) {
-              isRecipientInRoom = true;
+              isRecipientViewing = true;
               break;
             }
           }
         }
 
-        // Initial status update if recipient is online / viewing
-        if (isRecipientInRoom) {
+        // Initial status update: Mark seen ONLY if recipient is actively viewing this chat
+        if (isRecipientViewing) {
           await ChatService.markMessagesAsSeen(targetConvId, otherUserId);
           message.status = 'seen';
         } else if (isRecipientOnline) {
@@ -133,22 +123,12 @@ export const setupSocketHandlers = (io) => {
           message.status = 'delivered';
         }
 
-        // Emit message to all sockets in conversation room (both sender & recipient)
-        io.to(`conversation:${targetConvId}`).emit('receive_message', {
+        // Emit message to conversation room AND direct user rooms so unread count updates in real time
+        io.to(`conversation:${targetConvId}`).to(`user:${otherUserId}`).to(`user:${userId}`).emit('receive_message', {
           message,
           conversationId: targetConvId
         });
 
-        // Ensure recipient sockets join room if they haven't already
-        const recipientSockets = onlineUsersMap.get(otherUserId);
-        if (recipientSockets) {
-          recipientSockets.forEach(sId => {
-            const recipientSocket = io.sockets.sockets.get(sId);
-            if (recipientSocket) {
-              recipientSocket.join(`conversation:${targetConvId}`);
-            }
-          });
-        }
       } catch (err) {
         console.error('Socket send_message error:', err.message);
         socket.emit('error', { message: err.message });
@@ -163,7 +143,7 @@ export const setupSocketHandlers = (io) => {
 
         const updatedMessages = await ChatService.markMessagesAsSeen(conversationId, userId);
         if (updatedMessages.length > 0) {
-          io.to(`conversation:${conversationId}`).emit('messages_status_changed', {
+          io.to(`conversation:${conversationId}`).to(`user:${conv.participants.find(id => id !== userId)}`).emit('messages_status_changed', {
             conversationId,
             status: 'seen',
             messageIds: updatedMessages.map(m => m.id)
