@@ -12,9 +12,9 @@ const api = axios.create({
   }
 });
 
-// Request interceptor ensuring Authorization header is attached
+// Request interceptor ensuring Authorization header is attached from sessionStorage or localStorage
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('messenger_jwt_token') || localStorage.getItem('messenger_token');
+  const token = sessionStorage.getItem('messenger_token') || localStorage.getItem('messenger_token') || localStorage.getItem('messenger_jwt_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }

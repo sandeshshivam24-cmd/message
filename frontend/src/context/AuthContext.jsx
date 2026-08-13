@@ -5,18 +5,15 @@ const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  // Store authentication token in sessionStorage so that closing the tab/browser requires re-login
-  const [token, setToken] = useState(sessionStorage.getItem('messenger_token') || null);
+  // Read active authentication token from sessionStorage (or localStorage fallback)
+  const [token, setToken] = useState(() => sessionStorage.getItem('messenger_token') || localStorage.getItem('messenger_token') || null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const initAuth = async () => {
-      // Clear legacy persistent localStorage tokens if present
-      if (localStorage.getItem('messenger_token')) {
-        localStorage.removeItem('messenger_token');
-      }
+      const activeToken = sessionStorage.getItem('messenger_token') || localStorage.getItem('messenger_token');
 
-      if (token) {
+      if (activeToken) {
         try {
           const res = await authApi.getMe();
           setUser(res.data);
@@ -51,6 +48,7 @@ export const AuthProvider = ({ children }) => {
   const logout = () => {
     sessionStorage.removeItem('messenger_token');
     localStorage.removeItem('messenger_token');
+    localStorage.removeItem('messenger_jwt_token');
     setToken(null);
     setUser(null);
   };
